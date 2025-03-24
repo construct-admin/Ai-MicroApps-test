@@ -9,26 +9,29 @@ from PIL import Image
 from docx import Document
 from datetime import timedelta
 
-# Set Streamlit theme
 st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
 
-# Sidebar setup
-st.sidebar.title("Saved Frames & Transcripts")
+# App state
 st.session_state.setdefault("saved_frames", [])  # List of dicts: {image, original_frame_index}
 st.session_state.setdefault("saved_subtitles", [])
 st.session_state.setdefault("frame_index", 0)
-st.session_state.setdefault("frame_subtitle_map", {})
 st.session_state.setdefault("subtitles", {})
+st.session_state.setdefault("video_path", None)
+st.session_state.setdefault("fps", 30)
+st.session_state.setdefault("frame_count", 0)
 
-# Upload Video and SRT File
+# File uploads
 video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
 srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
 
-# Show video player
 if video_file:
     st.video(video_file)
+    temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    with open(temp_video_path, "wb") as f:
+        f.write(video_file.read())
+    st.session_state["video_path"] = temp_video_path
 
-# Function to parse SRT files
+# SRT parsing
 def parse_srt(file):
     subtitles = {}
     lines = file.read().decode("utf-8").split("\n")
@@ -45,89 +48,81 @@ def parse_srt(file):
                 subtitles[start_time] = line
     return subtitles
 
-# Convert seconds to timestamp format
 def seconds_to_timestamp(seconds):
     td = timedelta(seconds=int(seconds))
     ms = int((seconds - int(seconds)) * 1000)
     return f"{str(td)}.{ms:03d}"
 
-# Process video and SRT
-if video_file and srt_file and st.button("Process Video & Transcript"):
-    temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    with open(temp_video_path, "wb") as f:
-        f.write(video_file.read())
-
+# Process button
+if video_file and srt_file and st.button("Process"):
     st.session_state["subtitles"] = parse_srt(srt_file)
-    cap = cv2.VideoCapture(temp_video_path)
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    st.session_state["fps"] = fps
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    frame_skip = 10
-    st.session_state["frame_skip"] = frame_skip
-    st.session_state["frames"] = []
-    current_frame = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if current_frame % frame_skip == 0:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            st.session_state["frames"].append(Image.fromarray(frame_rgb))
-        current_frame += 1
+    cap = cv2.VideoCapture(st.session_state["video_path"])
+    st.session_state["fps"] = int(cap.get(cv2.CAP_PROP_FPS))
+    st.session_state["frame_count"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
+    st.success("Video and subtitles processed.")
 
-    st.session_state["frame_subtitle_map"] = {
-        int(start_time * (fps // frame_skip)): text
-        for start_time, text in st.session_state["subtitles"].items()
-    }
-
-# Display transcript
+# Transcript viewer
 st.sidebar.subheader("Transcript")
 for timestamp, text in st.session_state["subtitles"].items():
     st.sidebar.write(f"**{timestamp}**: {text}")
 
-# Frame Navigation
-total_frames = len(st.session_state.get("frames", [])) - 1
-if total_frames >= 0:
-    frame_index = st.slider("Select Frame", 0, total_frames, st.session_state["frame_index"], key="frame_slider")
-    st.session_state["frame_index"] = frame_index
-    st.image(st.session_state["frames"][frame_index], caption=f"Frame {frame_index}")
+# Video frame selector
+if st.session_state.get("video_path"):
+    frame_slider = st.slider("Select Frame", 0, st.session_state["frame_count"] - 1, st.session_state["frame_index"])
+    st.session_state["frame_index"] = frame_slider
+
+    # Seek to frame
+    cap = cv2.VideoCapture(st.session_state["video_path"])
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_slider)
+    ret, frame = cap.read()
+    cap.release()
+
+    if ret:
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb)
+        st.image(pil_image, caption=f"Frame {frame_slider}")
+    else:
+        st.warning("Could not read frame.")
+
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Previous Frame"):
-            st.session_state["frame_index"] = max(0, frame_index - 1)
+            st.session_state["frame_index"] = max(0, st.session_state["frame_index"] - 1)
     with col2:
         if st.button("Next Frame"):
-            st.session_state["frame_index"] = min(total_frames, frame_index + 1)
-    if st.button("Save Index"):
+            st.session_state["frame_index"] = min(st.session_state["frame_index"] + 1, st.session_state["frame_count"] - 1)
+
+    # Save frame
+    if st.button("Save This Frame"):
         st.session_state["saved_frames"].append({
-            "image": st.session_state["frames"][frame_index],
-            "original_frame_index": frame_index * st.session_state["frame_skip"]
+            "image": pil_image,
+            "original_frame_index": frame_slider
         })
-        st.session_state["saved_subtitles"].append(
-            st.session_state["frame_subtitle_map"].get(frame_index, "No Subtitle")
-        )
+        # Optional subtitle matching
+        subtitle = next((text for time, text in st.session_state["subtitles"].items()
+                         if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
+        st.session_state["saved_subtitles"].append(subtitle)
 
 # Show saved frames
 for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
     st.sidebar.image(frame_data["image"], caption=f"Saved Frame {i}")
     st.sidebar.write(subtitle)
 
-# Function to encode image as base64
+# Encode image for GPT
 def encode_image(image):
     buffered = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
     image.save(buffered, format="JPEG")
     with open(buffered.name, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
-# Transcription using OpenAI's API
+# GPT Transcription
 if "transcriptions" not in st.session_state:
     st.session_state["transcriptions"] = {}
 
-for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
+for i, frame_data in enumerate(st.session_state["saved_frames"]):
     if st.sidebar.button(f"Transcribe Frame {i}"):
-        st.sidebar.write(f"Processing transcription for Frame {i}...")
+        st.sidebar.write(f"Transcribing Frame {i}...")
 
         GPT_API_KEY = os.getenv("OPENAI_API_KEY")
         if not GPT_API_KEY:
@@ -157,25 +152,24 @@ for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"],
             st.sidebar.text_area(f"GPT Response for Frame {i}", transcription)
             st.session_state["transcriptions"][i] = transcription
         except Exception as e:
-            st.sidebar.error("Failed to process GPT response")
+            st.sidebar.error("Failed GPT response.")
             st.sidebar.write(response.text)
 
+    # Insert transcription
     if i in st.session_state["transcriptions"]:
         if st.sidebar.button(f"Insert into Transcript {i}"):
             fps = st.session_state.get("fps", 30)
-            original_frame = st.session_state["saved_frames"][i]["original_frame_index"]
+            original_frame = frame_data["original_frame_index"]
             seconds = original_frame / fps
             timestamp = seconds_to_timestamp(seconds)
-
             gpt_text = f"[GPT]: {st.session_state['transcriptions'][i]}"
             if timestamp in st.session_state["subtitles"]:
                 st.session_state["subtitles"][timestamp] += f"\n{gpt_text}"
             else:
                 st.session_state["subtitles"][timestamp] = gpt_text
+            st.sidebar.success(f"Inserted at {timestamp}")
 
-            st.sidebar.success(f"Inserted GPT response at {timestamp}")
-
-# Download full transcript
+# Download transcript
 def download_transcript():
     doc = Document()
     doc.add_heading("Visual Transcript", level=1)
