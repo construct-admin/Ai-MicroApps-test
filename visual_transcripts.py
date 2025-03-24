@@ -8,9 +8,12 @@ import requests
 from PIL import Image
 from openai import OpenAI
 from docx import Document
+import traceback
 
 # Initialize OpenAI client
 GPT_API_KEY = os.getenv("OPENAI_API_KEY")
+if not GPT_API_KEY:
+    st.error("OPENAI_API_KEY environment variable not found.")
 client = OpenAI(api_key=GPT_API_KEY)
 
 # Set Streamlit theme
@@ -45,96 +48,12 @@ def parse_srt(file):
                 subtitles[start_time] = line
     return subtitles
 
-if video_file and srt_file and st.button("Process Video & Transcript"):
-    temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    with open(temp_video_path, "wb") as f:
-        f.write(video_file.read())
-
-    st.session_state["subtitles"] = parse_srt(srt_file)
-    cap = cv2.VideoCapture(temp_video_path)
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
-        frames.append(pil_image)
-
-    cap.release()
-    st.session_state["frames"] = frames
-    st.session_state["frame_subtitle_map"] = {
-        int(start_time * fps): text for start_time, text in st.session_state["subtitles"].items()
-    }
-
-
-# Display transcript
-st.sidebar.subheader("Transcript")
-for timestamp, text in st.session_state["subtitles"].items():
-    st.sidebar.write(f"**{timestamp}**: {text}")
-
-# Frame Navigation
-total_frames = len(st.session_state.get("frames", [])) - 1
-if total_frames >= 0:
-    frame_index = st.slider("Select Frame", 0, total_frames, st.session_state["frame_index"], key="frame_slider")
-    st.session_state["frame_index"] = frame_index
-    st.image(st.session_state["frames"][frame_index], caption=f"Frame {frame_index}")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Previous Frame"):
-            st.session_state["frame_index"] = max(0, frame_index - 1)
-    with col2:
-        if st.button("Next Frame"):
-            st.session_state["frame_index"] = min(total_frames, frame_index + 1)
-    if st.button("Save Index"):
-        st.session_state["saved_frames"].append(st.session_state["frames"][frame_index])
-        st.session_state["saved_subtitles"].append(st.session_state["frame_subtitle_map"].get(frame_index, "No Subtitle"))
-
-# Show saved frames
-for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
-    st.sidebar.image(frame, caption=f"Saved Frame {i}")
-    st.sidebar.write(subtitle)
-
 # Function to encode image as base64
 def encode_image(image):
     buffered = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
     image.save(buffered, format="JPEG")
     with open(buffered.name, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
-
-# Transcription using OpenAI's API
-if "transcriptions" not in st.session_state:
-    st.session_state["transcriptions"] = {}
-
-for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
-    if st.sidebar.button(f"Transcribe Frame {i}"):
-        st.sidebar.write(f"Processing transcription for Frame {i}...")
-        base64_image = encode_image(frame)
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GPT_API_KEY}"}
-        payload = {
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "user", "content": [
-                    {"type": "text", "text": "What’s in this image?"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]}
-            ],
-            "max_tokens": 300
-        }
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-        gpt_response = response.json()
-        transcription = gpt_response['choices'][0]['message']['content']
-        st.sidebar.text_area(f"GPT Response for Frame {i}", transcription)
-        
-        st.session_state["transcriptions"][i] = transcription
-        
-    if i in st.session_state["transcriptions"]:
-        if st.sidebar.button(f"Insert into Transcript {i}"):
-            frame_timestamp = list(st.session_state["subtitles"].keys())[i]
-            st.session_state["subtitles"][frame_timestamp] += f"\n[GPT]: {st.session_state['transcriptions'][i]}"
-            st.sidebar.write("Inserted into transcript!")
 
 # Download full transcript
 def download_transcript():
@@ -147,5 +66,104 @@ def download_transcript():
     with open(temp_doc_path, "rb") as doc_file:
         st.sidebar.download_button("Download Transcript", doc_file, file_name="visual_transcript.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-st.sidebar.subheader("Download Options")
-download_transcript()
+# Try-catch for main logic
+try:
+    if video_file and srt_file and st.button("Process Video & Transcript"):
+        temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        with open(temp_video_path, "wb") as f:
+            f.write(video_file.read())
+
+        st.session_state["subtitles"] = parse_srt(srt_file)
+        cap = cv2.VideoCapture(temp_video_path)
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+            frames.append(pil_image)
+
+        cap.release()
+        st.session_state["frames"] = frames
+        st.session_state["frame_subtitle_map"] = {
+            int(start_time * fps): text for start_time, text in st.session_state["subtitles"].items()
+        }
+
+    # Display transcript
+    st.sidebar.subheader("Transcript")
+    for timestamp, text in st.session_state["subtitles"].items():
+        st.sidebar.write(f"**{timestamp}**: {text}")
+
+    # Frame Navigation
+    total_frames = len(st.session_state.get("frames", [])) - 1
+    if total_frames >= 0:
+        frame_index = st.slider("Select Frame", 0, total_frames, st.session_state["frame_index"], key="frame_slider")
+        st.session_state["frame_index"] = frame_index
+        st.image(st.session_state["frames"][frame_index], caption=f"Frame {frame_index}")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Previous Frame"):
+                st.session_state["frame_index"] = max(0, frame_index - 1)
+        with col2:
+            if st.button("Next Frame"):
+                st.session_state["frame_index"] = min(total_frames, frame_index + 1)
+        if st.button("Save Index"):
+            st.session_state["saved_frames"].append(st.session_state["frames"][frame_index])
+            st.session_state["saved_subtitles"].append(
+                st.session_state["frame_subtitle_map"].get(frame_index, "No Subtitle"))
+
+    # Show saved frames
+    for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
+        st.sidebar.image(frame, caption=f"Saved Frame {i}")
+        st.sidebar.write(subtitle)
+
+    # Transcription using OpenAI's API
+    if "transcriptions" not in st.session_state:
+        st.session_state["transcriptions"] = {}
+
+    for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
+        if st.sidebar.button(f"Transcribe Frame {i}"):
+            st.sidebar.write(f"Processing transcription for Frame {i}...")
+            base64_image = encode_image(frame)
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {GPT_API_KEY}"
+            }
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "What’s in this image?"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]}
+                ],
+                "max_tokens": 300
+            }
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+
+            try:
+                gpt_response = response.json()
+                transcription = gpt_response['choices'][0]['message']['content']
+                st.sidebar.text_area(f"GPT Response for Frame {i}", transcription)
+                st.session_state["transcriptions"][i] = transcription
+            except Exception:
+                st.sidebar.error("Failed to process OpenAI response")
+                st.sidebar.write(response.text)
+                raise
+
+        if i in st.session_state["transcriptions"]:
+            if st.sidebar.button(f"Insert into Transcript {i}"):
+                frame_timestamp = list(st.session_state["subtitles"].keys())[i]
+                st.session_state["subtitles"][frame_timestamp] += f"\n[GPT]: {st.session_state['transcriptions'][i]}"
+                st.sidebar.write("Inserted into transcript!")
+
+    # Download option
+    st.sidebar.subheader("Download Options")
+    download_transcript()
+
+except Exception as e:
+    st.error("An error occurred:")
+    st.code(traceback.format_exc())
