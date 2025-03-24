@@ -14,7 +14,7 @@ st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide"
 
 # Sidebar setup
 st.sidebar.title("Saved Frames & Transcripts")
-st.session_state.setdefault("saved_frames", [])
+st.session_state.setdefault("saved_frames", [])  # List of dicts: {image, original_frame_index}
 st.session_state.setdefault("saved_subtitles", [])
 st.session_state.setdefault("frame_index", 0)
 st.session_state.setdefault("frame_subtitle_map", {})
@@ -23,6 +23,10 @@ st.session_state.setdefault("subtitles", {})
 # Upload Video and SRT File
 video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
 srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
+
+# Show video player
+if video_file:
+    st.video(video_file)
 
 # Function to parse SRT files
 def parse_srt(file):
@@ -56,10 +60,9 @@ if video_file and srt_file and st.button("Process Video & Transcript"):
     st.session_state["subtitles"] = parse_srt(srt_file)
     cap = cv2.VideoCapture(temp_video_path)
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    st.session_state["fps"] = fps  # Store FPS globally
+    st.session_state["fps"] = fps
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Extract frames every N frames
     frame_skip = 10
     st.session_state["frame_skip"] = frame_skip
     st.session_state["frames"] = []
@@ -74,7 +77,6 @@ if video_file and srt_file and st.button("Process Video & Transcript"):
         current_frame += 1
     cap.release()
 
-    # Map subtitles to frames
     st.session_state["frame_subtitle_map"] = {
         int(start_time * (fps // frame_skip)): text
         for start_time, text in st.session_state["subtitles"].items()
@@ -99,14 +101,17 @@ if total_frames >= 0:
         if st.button("Next Frame"):
             st.session_state["frame_index"] = min(total_frames, frame_index + 1)
     if st.button("Save Index"):
-        st.session_state["saved_frames"].append(st.session_state["frames"][frame_index])
+        st.session_state["saved_frames"].append({
+            "image": st.session_state["frames"][frame_index],
+            "original_frame_index": frame_index * st.session_state["frame_skip"]
+        })
         st.session_state["saved_subtitles"].append(
             st.session_state["frame_subtitle_map"].get(frame_index, "No Subtitle")
         )
 
 # Show saved frames
-for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
-    st.sidebar.image(frame, caption=f"Saved Frame {i}")
+for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
+    st.sidebar.image(frame_data["image"], caption=f"Saved Frame {i}")
     st.sidebar.write(subtitle)
 
 # Function to encode image as base64
@@ -120,7 +125,7 @@ def encode_image(image):
 if "transcriptions" not in st.session_state:
     st.session_state["transcriptions"] = {}
 
-for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
+for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
     if st.sidebar.button(f"Transcribe Frame {i}"):
         st.sidebar.write(f"Processing transcription for Frame {i}...")
 
@@ -129,7 +134,7 @@ for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.s
             st.sidebar.error("Missing OPENAI_API_KEY")
             break
 
-        base64_image = encode_image(frame)
+        base64_image = encode_image(frame_data["image"])
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {GPT_API_KEY}"
@@ -155,13 +160,11 @@ for i, (frame, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.s
             st.sidebar.error("Failed to process GPT response")
             st.sidebar.write(response.text)
 
-    # ✅ Insert GPT at real timestamp
     if i in st.session_state["transcriptions"]:
         if st.sidebar.button(f"Insert into Transcript {i}"):
             fps = st.session_state.get("fps", 30)
-            frame_skip = st.session_state.get("frame_skip", 10)
-            frame_index = st.session_state["saved_frames"].index(frame)
-            seconds = frame_index * frame_skip / fps
+            original_frame = st.session_state["saved_frames"][i]["original_frame_index"]
+            seconds = original_frame / fps
             timestamp = seconds_to_timestamp(seconds)
 
             gpt_text = f"[GPT]: {st.session_state['transcriptions'][i]}"
