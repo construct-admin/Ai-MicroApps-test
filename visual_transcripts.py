@@ -196,7 +196,7 @@ for i, frame_data in enumerate(st.session_state["saved_frames"]):
             original_frame = frame_data["original_frame_index"]
             seconds = original_frame / fps
             timestamp = seconds_to_timestamp(seconds)
-            gpt_text = f"[GPT]: {st.session_state['transcriptions'][i]}"
+            gpt_text = f"[Visual Transcript]: {st.session_state['transcriptions'][i]}"
             if timestamp in st.session_state["subtitles"]:
                 st.session_state["subtitles"][timestamp] += f"\n{gpt_text}"
             else:
