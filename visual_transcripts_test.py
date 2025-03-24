@@ -24,8 +24,10 @@ st.session_state.setdefault("frame_count", 0)
 video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
 srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
 
+# Show video in accordion
 if video_file:
-    st.video(video_file)
+    with st.expander("▶️ Click to Preview Uploaded Video"):
+        st.video(video_file)
     temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     with open(temp_video_path, "wb") as f:
         f.write(video_file.read())
@@ -53,7 +55,7 @@ def seconds_to_timestamp(seconds):
     ms = int((seconds - int(seconds)) * 1000)
     return f"{str(td)}.{ms:03d}"
 
-# Process button
+# Process video and subtitles
 if video_file and srt_file and st.button("Process"):
     st.session_state["subtitles"] = parse_srt(srt_file)
     cap = cv2.VideoCapture(st.session_state["video_path"])
@@ -67,7 +69,7 @@ st.sidebar.subheader("Transcript")
 for timestamp, text in st.session_state["subtitles"].items():
     st.sidebar.write(f"**{timestamp}**: {text}")
 
-# Video frame selector
+# Frame slider and navigation
 if st.session_state.get("video_path"):
     frame_slider = st.slider("Select Frame", 0, st.session_state["frame_count"] - 1, st.session_state["frame_index"])
     st.session_state["frame_index"] = frame_slider
@@ -99,7 +101,6 @@ if st.session_state.get("video_path"):
             "image": pil_image,
             "original_frame_index": frame_slider
         })
-        # Optional subtitle matching
         subtitle = next((text for time, text in st.session_state["subtitles"].items()
                          if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
         st.session_state["saved_subtitles"].append(subtitle)
