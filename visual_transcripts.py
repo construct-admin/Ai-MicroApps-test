@@ -6,7 +6,7 @@ import tempfile
 import base64
 import requests
 from PIL import Image
-from openai import OpenAI
+import openai
 from docx import Document
 import traceback
 
@@ -14,7 +14,7 @@ import traceback
 GPT_API_KEY = os.getenv("OPENAI_API_KEY")
 if not GPT_API_KEY:
     st.error("OPENAI_API_KEY environment variable not found.")
-client = OpenAI(api_key=GPT_API_KEY)
+openai.api_key = GPT_API_KEY
 
 # Set Streamlit theme
 st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
@@ -128,10 +128,6 @@ try:
         if st.sidebar.button(f"Transcribe Frame {i}"):
             st.sidebar.write(f"Processing transcription for Frame {i}...")
             base64_image = encode_image(frame)
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {GPT_API_KEY}"
-            }
             payload = {
                 "model": "gpt-4o",
                 "messages": [
@@ -142,16 +138,15 @@ try:
                 ],
                 "max_tokens": 300
             }
-            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+            response = openai.ChatCompletion.create(**payload)
 
             try:
-                gpt_response = response.json()
-                transcription = gpt_response['choices'][0]['message']['content']
+                transcription = response['choices'][0]['message']['content']
                 st.sidebar.text_area(f"GPT Response for Frame {i}", transcription)
                 st.session_state["transcriptions"][i] = transcription
             except Exception:
                 st.sidebar.error("Failed to process OpenAI response")
-                st.sidebar.write(response.text)
+                st.sidebar.write(response)
                 raise
 
         if i in st.session_state["transcriptions"]:
