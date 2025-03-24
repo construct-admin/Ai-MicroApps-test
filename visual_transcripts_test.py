@@ -8,8 +8,39 @@ import requests
 from PIL import Image
 from docx import Document
 from datetime import timedelta
+import hashlib
+
 
 st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
+
+### Hash function for access code encryption
+def hash_code(input_code):
+    """Hashes the access code using SHA-256."""
+    return hashlib.sha256(input_code.encode()).hexdigest()
+
+### Retrieve hash code from environment variable
+ACCESS_CODE_HASH = os.getenv("ACCESS_CODE_HASH")
+
+if not ACCESS_CODE_HASH:
+    st.error("⚠️ Hashed access code not found. Please set ACCESS_CODE_HASH.")
+    st.stop()
+
+### Authentication Logic
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("🔒 Access Restricted")
+    access_code_input = st.text_input("Enter Access Code:", type="password", key="access_code_input")
+
+    if st.button("Submit", key="submit_access_code"):
+        if hash_code(access_code_input) == ACCESS_CODE_HASH:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect access code. Please try again.")
+
+    st.stop()  # Prevent unauthorized access
 
 # App state
 st.session_state.setdefault("saved_frames", [])
@@ -185,3 +216,6 @@ def download_transcript():
 
 st.sidebar.subheader("Download Options")
 download_transcript()
+
+### Logout Button in Sidebar
+st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}), key="logout_button")
