@@ -66,13 +66,15 @@ if video_file and srt_file and st.button("Process"):
     st.session_state["video_ready"] = True
     st.success("Video and subtitles processed.")
 
-# Transcript viewer
+# Sidebar transcript view
 st.sidebar.subheader("Transcript")
 for timestamp, text in st.session_state["subtitles"].items():
     st.sidebar.write(f"**{timestamp}**: {text}")
 
-# Frame slider and navigation
-if st.session_state.get("video_path"):
+# 🔒 Only show frame section after processing
+if st.session_state.get("video_ready", False):
+
+    # Frame navigation
     frame_slider = st.slider("Select Frame", 0, st.session_state["frame_count"] - 1, st.session_state["frame_index"])
     st.session_state["frame_index"] = frame_slider
 
@@ -96,16 +98,15 @@ if st.session_state.get("video_path"):
         if st.button("Next Frame"):
             st.session_state["frame_index"] = min(st.session_state["frame_index"] + 1, st.session_state["frame_count"] - 1)
 
-    # Save frame — only after processing
-    if st.session_state.get("video_ready", False):
-        if st.button("Save This Frame"):
-            st.session_state["saved_frames"].append({
-                "image": pil_image,
-                "original_frame_index": frame_slider
-            })
-            subtitle = next((text for time, text in st.session_state["subtitles"].items()
-                            if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
-            st.session_state["saved_subtitles"].append(subtitle)
+    # Save current frame
+    if st.button("Save This Frame"):
+        st.session_state["saved_frames"].append({
+            "image": pil_image,
+            "original_frame_index": frame_slider
+        })
+        subtitle = next((text for time, text in st.session_state["subtitles"].items()
+                        if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
+        st.session_state["saved_subtitles"].append(subtitle)
 
 # Show saved frames
 for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
@@ -119,7 +120,7 @@ def encode_image(image):
     with open(buffered.name, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
-# GPT Transcription
+# GPT transcription
 if "transcriptions" not in st.session_state:
     st.session_state["transcriptions"] = {}
 
