@@ -53,13 +53,22 @@ if video_file and srt_file and st.button("Process Video & Transcript"):
     st.session_state["subtitles"] = parse_srt(srt_file)
     cap = cv2.VideoCapture(temp_video_path)
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    if not st.session_state.get("frames"):
-        st.session_state["frames"] = [Image.fromarray(cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2RGB)) for _ in range(total_frames) if cap.read()[0]]
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb)
+        frames.append(pil_image)
 
     cap.release()
-    st.session_state["frame_subtitle_map"] = {int(start_time * fps): text for start_time, text in st.session_state["subtitles"].items()}
+    st.session_state["frames"] = frames
+    st.session_state["frame_subtitle_map"] = {
+        int(start_time * fps): text for start_time, text in st.session_state["subtitles"].items()
+    }
+
 
 # Display transcript
 st.sidebar.subheader("Transcript")
