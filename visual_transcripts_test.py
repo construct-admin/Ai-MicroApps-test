@@ -12,15 +12,16 @@ from datetime import timedelta
 st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
 
 # App state
-st.session_state.setdefault("saved_frames", [])  # List of dicts: {image, original_frame_index}
+st.session_state.setdefault("saved_frames", [])
 st.session_state.setdefault("saved_subtitles", [])
 st.session_state.setdefault("frame_index", 0)
 st.session_state.setdefault("subtitles", {})
 st.session_state.setdefault("video_path", None)
 st.session_state.setdefault("fps", 30)
 st.session_state.setdefault("frame_count", 0)
+st.session_state.setdefault("video_ready", False)
 
-# File uploads
+# Upload files
 video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
 srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
 
@@ -55,13 +56,14 @@ def seconds_to_timestamp(seconds):
     ms = int((seconds - int(seconds)) * 1000)
     return f"{str(td)}.{ms:03d}"
 
-# Process video and subtitles
+# Process button
 if video_file and srt_file and st.button("Process"):
     st.session_state["subtitles"] = parse_srt(srt_file)
     cap = cv2.VideoCapture(st.session_state["video_path"])
     st.session_state["fps"] = int(cap.get(cv2.CAP_PROP_FPS))
     st.session_state["frame_count"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
+    st.session_state["video_ready"] = True
     st.success("Video and subtitles processed.")
 
 # Transcript viewer
@@ -74,7 +76,6 @@ if st.session_state.get("video_path"):
     frame_slider = st.slider("Select Frame", 0, st.session_state["frame_count"] - 1, st.session_state["frame_index"])
     st.session_state["frame_index"] = frame_slider
 
-    # Seek to frame
     cap = cv2.VideoCapture(st.session_state["video_path"])
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_slider)
     ret, frame = cap.read()
@@ -95,15 +96,16 @@ if st.session_state.get("video_path"):
         if st.button("Next Frame"):
             st.session_state["frame_index"] = min(st.session_state["frame_index"] + 1, st.session_state["frame_count"] - 1)
 
-    # Save frame
-    if st.button("Save This Frame"):
-        st.session_state["saved_frames"].append({
-            "image": pil_image,
-            "original_frame_index": frame_slider
-        })
-        subtitle = next((text for time, text in st.session_state["subtitles"].items()
-                         if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
-        st.session_state["saved_subtitles"].append(subtitle)
+    # Save frame — only after processing
+    if st.session_state.get("video_ready", False):
+        if st.button("Save This Frame"):
+            st.session_state["saved_frames"].append({
+                "image": pil_image,
+                "original_frame_index": frame_slider
+            })
+            subtitle = next((text for time, text in st.session_state["subtitles"].items()
+                            if int(time * st.session_state["fps"]) == frame_slider), "No Subtitle")
+            st.session_state["saved_subtitles"].append(subtitle)
 
 # Show saved frames
 for i, (frame_data, subtitle) in enumerate(zip(st.session_state["saved_frames"], st.session_state["saved_subtitles"])):
@@ -156,7 +158,6 @@ for i, frame_data in enumerate(st.session_state["saved_frames"]):
             st.sidebar.error("Failed GPT response.")
             st.sidebar.write(response.text)
 
-    # Insert transcription
     if i in st.session_state["transcriptions"]:
         if st.sidebar.button(f"Insert into Transcript {i}"):
             fps = st.session_state.get("fps", 30)
