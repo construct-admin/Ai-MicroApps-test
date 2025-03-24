@@ -1,73 +1,75 @@
 import streamlit as st
-import cv2
-import numpy as np
-import os
-import tempfile
-import base64
-import requests
-from PIL import Image
-import openai
-from docx import Document
 import traceback
 
-# Initialize OpenAI client
-GPT_API_KEY = os.getenv("OPENAI_API_KEY")
-if not GPT_API_KEY:
-    st.error("OPENAI_API_KEY environment variable not found.")
-openai.api_key = GPT_API_KEY
+def run_app():
+    import cv2
+    import numpy as np
+    import os
+    import tempfile
+    import base64
+    import requests
+    from PIL import Image
+    import openai
+    from docx import Document
 
-# Set Streamlit theme
-st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
+    # Read environment variable safely
+    GPT_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not GPT_API_KEY:
+        st.error("OPENAI_API_KEY environment variable not set.")
+        return
+    openai.api_key = GPT_API_KEY
 
-# Sidebar setup
-st.sidebar.title("Saved Frames & Transcripts")
-st.session_state.setdefault("saved_frames", [])
-st.session_state.setdefault("saved_subtitles", [])
-st.session_state.setdefault("frame_index", 0)
-st.session_state.setdefault("frame_subtitle_map", {})
-st.session_state.setdefault("subtitles", {})
+    # Set Streamlit theme
+    st.set_page_config(page_title="VT Generator", page_icon="🖼️", layout="wide")
 
-# Upload Video and SRT File
-video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
-srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
+    # Sidebar setup
+    st.sidebar.title("Saved Frames & Transcripts")
+    st.session_state.setdefault("saved_frames", [])
+    st.session_state.setdefault("saved_subtitles", [])
+    st.session_state.setdefault("frame_index", 0)
+    st.session_state.setdefault("frame_subtitle_map", {})
+    st.session_state.setdefault("subtitles", {})
 
-# Function to parse SRT files
-def parse_srt(file):
-    subtitles = {}
-    lines = file.read().decode("utf-8").split("\n")
-    index, start_time = None, None
-    for line in lines:
-        line = line.strip()
-        if line.isdigit():
-            index = int(line)
-        elif "-->" in line:
-            start_time = line.split(" --> ")[0]
-            start_time = sum(float(x) * 60 ** i for i, x in enumerate(reversed(start_time.replace(',', '.').split(':'))))
-        elif line:
-            if index is not None and start_time is not None:
-                subtitles[start_time] = line
-    return subtitles
+    # Upload Video and SRT File
+    video_file = st.file_uploader("Upload Video File (MP4)", type=["mp4"])
+    srt_file = st.file_uploader("Upload Subtitle File (SRT)", type=["srt"])
 
-# Function to encode image as base64
-def encode_image(image):
-    buffered = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    image.save(buffered, format="JPEG")
-    with open(buffered.name, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+    # Function to parse SRT files
+    def parse_srt(file):
+        subtitles = {}
+        lines = file.read().decode("utf-8").split("\n")
+        index, start_time = None, None
+        for line in lines:
+            line = line.strip()
+            if line.isdigit():
+                index = int(line)
+            elif "-->" in line:
+                start_time = line.split(" --> ")[0]
+                start_time = sum(float(x) * 60 ** i for i, x in enumerate(reversed(start_time.replace(',', '.').split(':'))))
+            elif line:
+                if index is not None and start_time is not None:
+                    subtitles[start_time] = line
+        return subtitles
 
-# Download full transcript
-def download_transcript():
-    doc = Document()
-    doc.add_heading("Visual Transcript", level=1)
-    for timestamp, text in st.session_state["subtitles"].items():
-        doc.add_paragraph(f"{timestamp}: {text}")
-    temp_doc_path = tempfile.NamedTemporaryFile(delete=False, suffix=".docx").name
-    doc.save(temp_doc_path)
-    with open(temp_doc_path, "rb") as doc_file:
-        st.sidebar.download_button("Download Transcript", doc_file, file_name="visual_transcript.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    # Function to encode image as base64
+    def encode_image(image):
+        buffered = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        image.save(buffered, format="JPEG")
+        with open(buffered.name, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
 
-# Try-catch for main logic
-try:
+    # Download full transcript
+    def download_transcript():
+        doc = Document()
+        doc.add_heading("Visual Transcript", level=1)
+        for timestamp, text in st.session_state["subtitles"].items():
+            doc.add_paragraph(f"{timestamp}: {text}")
+        temp_doc_path = tempfile.NamedTemporaryFile(delete=False, suffix=".docx").name
+        doc.save(temp_doc_path)
+        with open(temp_doc_path, "rb") as doc_file:
+            st.sidebar.download_button("Download Transcript", doc_file, file_name="visual_transcript.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+    # Main App Logic
     if video_file and srt_file and st.button("Process Video & Transcript"):
         temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         with open(temp_video_path, "wb") as f:
@@ -138,15 +140,15 @@ try:
                 ],
                 "max_tokens": 300
             }
-            response = openai.ChatCompletion.create(**payload)
 
             try:
+                response = openai.ChatCompletion.create(**payload)
                 transcription = response['choices'][0]['message']['content']
                 st.sidebar.text_area(f"GPT Response for Frame {i}", transcription)
                 st.session_state["transcriptions"][i] = transcription
-            except Exception:
-                st.sidebar.error("Failed to process OpenAI response")
-                st.sidebar.write(response)
+            except Exception as e:
+                st.sidebar.error("Failed to process OpenAI response.")
+                st.sidebar.write(str(e))
                 raise
 
         if i in st.session_state["transcriptions"]:
@@ -159,6 +161,11 @@ try:
     st.sidebar.subheader("Download Options")
     download_transcript()
 
-except Exception as e:
-    st.error("An error occurred:")
-    st.code(traceback.format_exc())
+
+# Final error catch at the top level
+if __name__ == "__main__":
+    try:
+        run_app()
+    except Exception as e:
+        st.error("App crashed with an unexpected error:")
+        st.code(traceback.format_exc())
