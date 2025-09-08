@@ -1,28 +1,30 @@
-import re
 import os
+import re
+import sys
+import json
 import time
+import subprocess
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Optional, Dict, Any, Callable
 
 import streamlit as st
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
+import pandas as pd
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import pyperclip
 
-# -------------------------
-# Streamlit Page Config
-# -------------------------
-st.set_page_config(page_title="Coursera → Doc Agent", page_icon="📋", layout="wide")
-st.title("📋 Coursera → Google Doc (copy‑paste) Agent")
-st.caption("Headful Playwright + your Chrome profile. Automates clicking each item, extracting text, and building a .docx you can import into Google Docs.")
+# ===============
+# Page config
+# ===============
+st.set_page_config(page_title="Coursera → Google Doc (Agentic)", page_icon="🤖", layout="wide")
+st.title("🤖 Coursera → Google Doc — Agentic Exporter")
+st.caption("GPT function-calling orchestrates Playwright to click through your Coursera course and build a .docx ready for Google Docs.")
 
-# -------------------------
-# Utilities
-# -------------------------
 COURSE_EDIT_TMPL = "https://www.coursera.org/teach/{slug}/content/edit"
 
+# ===============
+# Models / state
+# ===============
 @dataclass
 class ItemRecord:
     module_index: int
@@ -33,374 +35,514 @@ class ItemRecord:
     content_text: str
 
 @dataclass
-class RunResult:
+class RunState:
     course_slug: str
     items: List[ItemRecord] = field(default_factory=list)
+    seen_titles: set = field(default_factory=set)
     errors: List[str] = field(default_factory=list)
 
+# ===============
+# Playwright bootstrap (self-healing)
+# ===============
 
-def parse_slug_from_input(user_input: str) -> str:
-    """Accepts a full /teach/.../content/edit URL or a bare slug and returns slug."""
-    url = user_input.strip().strip('"')
-    m = re.search(r"/teach/([\w\-]+)/content/edit", url)
-    if m:
-        return m.group(1)
-    # If it's just a slug-looking string
-    return url.split("?")[0].split("/")[-1]
+def ensure_playwright():
+    """Import Playwright; if missing, pip-install it; ensure Chromium is available."""
+    try:
+        import playwright  # noqa: F401
+    except Exception:
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright==1.46.0"])  # stable pin
+        except Exception as e:
+            st.error(f"Failed to install Playwright: {e}")
+            st.stop()
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception:
+        pass
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError  # type: ignore
+    return sync_playwright, PWTimeoutError
 
+# ===============
+# JS utilities injected in page
+# ===============
 
-def deep_query_eval_script() -> str:
-    return r"""
-    (function() {
-      function allDeepChildren(root) {
-        const out = [];
-        function walk(node) {
-          out.push(node);
-          if (node.shadowRoot) {
-            Array.from(node.shadowRoot.children).forEach(walk);
-          }
-          Array.from(node.children).forEach(walk);
-        }
-        walk(root);
-        return out;
-      }
-      function text(el) {
-        return (el && (el.textContent || "")).trim().replace(/\s+\n/g, "\n").replace(/[ \t]+/g," ").trim();
-      }
-      const root = document.documentElement;
-      const nodes = allDeepChildren(root);
-      const moduleRows = nodes.filter(n => n.getAttribute && (
-        n.getAttribute("data-e2e") === "module-row" ||
-        n.getAttribute("data-e2e") === "content-module" ||
-        (n.className && String(n.className).match(/module/i))
-      ));
-      const outline = [];
-      for (const m of moduleRows) {
-        const kids = allDeepChildren(m);
-        const titleEl = kids.find(k => k.getAttribute && (
-          k.getAttribute("data-e2e") === "module-title" ||
-          k.getAttribute("data-e2e") === "editable-title" ||
-          k.tagName === "H2" || k.tagName === "H3"
-        )) || m;
-        const moduleTitle = (text(titleEl) || "Untitled Module").replace(/^\s*Module\s*:\s*/i, "");
-        const itemNodes = kids.filter(k => k.getAttribute && (
-          k.getAttribute("data-e2e") === "module-item" ||
-          k.getAttribute("data-e2e") === "content-item" ||
-          String(k.className||"").match(/(module|content)[-_ ]item/i)
-        ));
-        const uniqueItems = Array.from(new Set(itemNodes));
-        const items = [];
-        uniqueItems.forEach((it, idx) => {
-          const leafKids = allDeepChildren(it);
-          const titleCand = leafKids.find(a => a.getAttribute && (
-            a.getAttribute("data-e2e") === "item-title" ||
-            a.getAttribute("data-e2e") === "editable-title" ||
-            a.tagName === "H4" || a.tagName === "H5" || a.tagName === "A" || a.tagName === "DIV"
-          )) || it;
-          const t = text(titleCand) || `Item ${idx+1}`;
-          const lower = t.toLowerCase();
-          let itype = "page";
-          if (lower.match(/quiz|knowledge\s*check|assessment/)) itype = "quiz";
-          else if (lower.match(/assignment|graded/)) itype = "assignment";
-          else if (lower.match(/discussion/)) itype = "discussion";
-          else if (lower.match(/video|lecture/)) itype = "video";
-          items.push({ title: t, type: itype, indexHint: idx });
-        });
-        outline.push({ moduleTitle, items });
-      }
-      return outline;
-    })();
-    """
-
-
-def grab_visible_text_script() -> str:
+def js_all_in_one() -> str:
     return r"""
     (function(){
-      function allDeep(root) {
-        const out=[]; 
-        function walk(n){ 
-          out.push(n); 
-          if(n.shadowRoot){ Array.from(n.shadowRoot.children).forEach(walk); }
-          Array.from(n.children).forEach(walk);
+      function allDeepChildren(root) { const out=[]; function w(n){ out.push(n); if(n && n.shadowRoot){ Array.from(n.shadowRoot.children).forEach(w); } if(n && n.children){ Array.from(n.children).forEach(w); } } w(root||document.documentElement); return out; }
+      function text(el){ try{ return (el && (el.textContent||'')).replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/[ \t]+/g,' ').trim(); }catch(e){ return ''; } }
+      function vis(n){ try{ const s=getComputedStyle(n); return s && s.visibility!=='hidden' && s.display!=='none'; }catch(e){ return false; } }
+      function hasScroll(n){ try{ return n && (n.scrollHeight > n.clientHeight+30) && (getComputedStyle(n).overflowY||'').match(/auto|scroll/); }catch(e){return false;} }
+
+      function deepOutlineOnce(){
+        const nodes = allDeepChildren(document.documentElement);
+        const moduleRows = nodes.filter(n => n.getAttribute && (
+          n.getAttribute('data-e2e')==='module-row' || n.getAttribute('data-e2e')==='content-module' || (''+(n.className||'')).match(/\bmodule\b/i)
+        ));
+        const outline=[];
+        for(const m of moduleRows){
+          const kids = allDeepChildren(m);
+          const titleEl = kids.find(k => k.getAttribute && (k.getAttribute('data-e2e')==='module-title' || k.getAttribute('data-e2e')==='editable-title' || k.tagName==='H2' || k.tagName==='H3')) || m;
+          const moduleTitle = (text(titleEl)||'Untitled Module').replace(/^\s*Module\s*:\s*/i,'');
+          const itemNodes = kids.filter(k => k.getAttribute && (k.getAttribute('data-e2e')==='module-item' || k.getAttribute('data-e2e')==='content-item' || (''+(k.className||'')).match(/(module|content)[-_ ]item/i)));
+          const uniq = Array.from(new Set(itemNodes));
+          const items=[];
+          uniq.forEach((it,idx)=>{
+            const leaf = allDeepChildren(it).find(a => a.getAttribute && (a.getAttribute('data-e2e')==='item-title' || a.getAttribute('data-e2e')==='editable-title' || a.tagName==='H4' || a.tagName==='H5' || a.tagName==='A' || a.tagName==='DIV')) || it;
+            const t = text(leaf) || `Item ${idx+1}`;
+            const lower = t.toLowerCase();
+            let ty='page';
+            if(/quiz|knowledge\s*check|assessment/.test(lower)) ty='quiz'; else if(/assignment|graded/.test(lower)) ty='assignment'; else if(/discussion/.test(lower)) ty='discussion'; else if(/video|lecture/.test(lower)) ty='video';
+            items.push({title:t, type:ty});
+          });
+          if(items.length) outline.push({moduleTitle, items});
         }
-        walk(root); return out;
+        return outline;
       }
-      const nodes = allDeep(document.documentElement);
-      function scoreNode(n){
-        const style = window.getComputedStyle(n);
-        if (style && (style.visibility === "hidden" || style.display === "none")) return 0;
-        let t = (n.innerText || "").trim();
-        if (!t) return 0;
-        const tag = (n.tagName || "").toLowerCase();
-        if (["nav","header","footer","button"].includes(tag)) return 0;
-        const cls = (n.className || "").toString().toLowerCase();
-        if (cls.match(/toolbar|menu|aside|toast|modal|breadcrumb/)) return 0;
-        let base = t.length;
-        if (n.getAttribute && n.getAttribute("contenteditable") == "true") base *= 1.5;
-        if (["article","main","section"].includes(tag)) base *= 1.3;
-        return base;
+
+      function guessScrollContainer(){
+        const cands = allDeepChildren(document.documentElement).filter(n=>hasScroll(n) && vis(n) && n.clientHeight>300);
+        function score(n){ const kids=n.querySelectorAll('[role=listitem],[data-e2e],a,h2,h3,h4'); return (n.clientHeight||0) + kids.length*5; }
+        let best=null,b=0; cands.forEach(n=>{ const s=score(n); if(s>b){best=n;b=s;} });
+        return best || document.scrollingElement || document.documentElement;
       }
-      let best = null; let bestScore = 0;
-      for (const n of nodes) {
-        const sc = scoreNode(n);
-        if (sc > bestScore) { best = n; bestScore = sc; }
+
+      function collectVisiblePairs(){
+        const nodes=allDeepChildren(document.documentElement); const out=[];
+        function isItem(n){ try{ const de=(n.getAttribute && (n.getAttribute('data-e2e')||''))||''; const cls=(''+(n.className||'')); const role=(n.getAttribute && (n.getAttribute('role')||''))||''; if(/module-item|content-item|item-row|curriculum-item/i.test(de)) return true; if(/(module|content)[-_ ]item|itemRow|curriculum-item|lesson[-_ ]item|rc-Item/i.test(cls)) return true; if(role==='listitem' && /(item|lesson|unit|content|resource)/i.test(cls)) return true; return false; }catch(e){return false;} }
+        function findTitle(n){ const el=n.querySelector('[data-e2e="item-title"],[data-e2e="editable-title"],a,h4,h5,[role=button],div'); return text(el||n).slice(0,200); }
+        function findModule(n){ let cur=n; for(let i=0;i<8 && cur;i++){ if(cur.getAttribute){ const de=(cur.getAttribute('data-e2e')||''); const cls=(''+(cur.className||'')); if(/module-row|content-module|module-container|rc-Module/i.test(de+" "+cls)){ const h=cur.querySelector('[data-e2e="module-title"],[data-e2e="editable-title"],h2,h3'); const t=text(h||cur); if(t) return t; } } cur=cur.parentElement; } const hs=[...document.querySelectorAll('h2,h3')]; let best='',top=-1; const r=n.getBoundingClientRect(); hs.forEach(h=>{ const rh=h.getBoundingClientRect(); if(rh.top<r.top && rh.top>top){ top=rh.top; best=text(h); } }); return best||'Untitled Module'; }
+        function ty(t){ const l=t.toLowerCase(); if(/quiz|knowledge\s*check|assessment/.test(l)) return 'quiz'; if(/assignment|graded/.test(l)) return 'assignment'; if(/discussion/.test(l)) return 'discussion'; if(/video|lecture/.test(l)) return 'video'; return 'page'; }
+        nodes.forEach(n=>{ if(!vis(n) || !isItem(n)) return; const t=findTitle(n); if(!t) return; out.push({moduleTitle:findModule(n), itemTitle:t, itemType:ty(t)}); });
+        const seen=new Set(); const dedup=[]; for(const it of out){ const k=it.moduleTitle+'\u0000'+it.itemTitle; if(!seen.has(k)){ seen.add(k); dedup.push(it); } }
+        return dedup;
       }
-      const txt = best ? (best.innerText || "").trim() : "";
-      return txt.replace(/\n{3,}/g, "\n\n");
+
+      function mainText(){
+        const nodes =(function allDeep(root){ const out=[]; function w(n){ out.push(n); if(n.shadowRoot){Array.from(n.shadowRoot.children).forEach(w);} Array.from(n.children).forEach(w);} w(root||document.documentElement); return out; })(document.documentElement);
+        function score(n){ try{ const s=getComputedStyle(n); if(s && (s.visibility==='hidden'||s.display==='none')) return 0; }catch(e){return 0;} const t=(n.innerText||'').trim(); if(!t) return 0; const tag=(n.tagName||'').toLowerCase(); if(['nav','header','footer','button'].includes(tag)) return 0; const cls=(''+(n.className||'')).toLowerCase(); if(/toolbar|menu|aside|toast|modal|breadcrumb/.test(cls)) return 0; let base=t.length; if(n.getAttribute&&n.getAttribute('contenteditable')==='true') base*=1.4; if(['article','main','section'].includes(tag)) base*=1.2; return base; }
+        let best=null,bs=0; for(const n of nodes){ const sc=score(n); if(sc>bs){best=n; bs=sc;} }
+        return best ? (best.innerText||'').trim().replace(/\n{3,}/g,'\n\n') : '';
+      }
+
+      return { deepOutlineOnce, guessScrollContainer, collectVisiblePairs, mainText };
     })();
     """
 
 
-def wait_for_editor_ready(page, ms: int = 800):
-    time.sleep(ms / 1000.0)
+def js_call(fn: str) -> str:
+    return f"""
+    (function(){{ const lib = ({js_all_in_one}); return lib.{fn}; }})()
+    """.replace("{js_all_in_one}", js_all_in_one())
+
+# ===============
+# Outline & capture helpers
+# ===============
+
+def wait_ready(page, ms=900):
+    time.sleep(ms/1000.0)
     try:
-        page.mouse.wheel(0, 300)
-        time.sleep(0.2)
+        page.mouse.wheel(0, 400)
     except Exception:
         pass
 
 
-def export_docx(run: RunResult, outfile: str) -> str:
-    doc = Document()
-    styles = doc.styles
-    # Title
-    h = doc.add_heading(f"Coursera Export: {run.course_slug}", 0)
-    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    doc.add_paragraph("")
+def build_outline(page, log) -> List[Dict[str, Any]]:
+    # A) e2e selectors
+    try:
+        outline = page.evaluate(js_call("deepOutlineOnce()"))
+    except Exception:
+        outline = []
+    total = sum(len(m.get("items", [])) for m in outline)
+    if total:
+        log.write(f"Outline via e2e selectors → {total} items")
+        return outline
 
-    current_module = None
-    for rec in run.items:
-        if rec.module_title != current_module:
-            doc.add_heading(f"Module {rec.module_index}: {rec.module_title}", level=1)
-            current_module = rec.module_title
-        doc.add_heading(f"{rec.item_type.title()}: {rec.item_title}", level=2)
-        if rec.content_text.strip():
-            p = doc.add_paragraph(rec.content_text.strip())
-            p_format = p.paragraph_format
-            p_format.space_after = Pt(6)
-        else:
-            doc.add_paragraph("[Captured title only or non-text content (quiz/LTI/external).]")
-        doc.add_paragraph("")
+    # B) scroll + visible scan
+    log.write("No outline found. Progressive scroll scan…")
+    try:
+        page.evaluate("""
+        (function(){ try{ const lib=(%s); const sc = lib.guessScrollContainer(); sc && sc.setAttribute('data-agent-scroll-root','1'); }catch(e){} })();
+        """ % js_all_in_one())
+    except Exception:
+        pass
 
-    doc.save(outfile)
-    return outfile
+    seen = []
+    seen_keys = set()
+
+    def scroll_down():
+        try:
+            page.evaluate("(function(){ const sc=document.querySelector('[data-agent-scroll-root="1"]') || document.scrollingElement || document.documentElement; sc.scrollBy({top:800,behavior:'auto'}); })();")
+        except Exception:
+            try:
+                page.mouse.wheel(0, 800)
+            except Exception:
+                pass
+
+    for _ in range(24):
+        try:
+            vis = page.evaluate(js_call("collectVisiblePairs()"))
+        except Exception:
+            vis = []
+        for it in vis:
+            key = it.get("moduleTitle","?") + "\u0000" + it.get("itemTitle","?")
+            if key not in seen_keys and it.get("itemTitle"):
+                seen_keys.add(key)
+                seen.append(it)
+        scroll_down()
+        wait_ready(page, 250)
+
+    # group
+    modules: Dict[str, List[Dict[str,str]]] = {}
+    for p in seen:
+        mt = p.get("moduleTitle") or "Untitled Module"
+        modules.setdefault(mt, []).append({"title": p.get("itemTitle"), "type": p.get("itemType","page")})
+    outline = [{"moduleTitle": m, "items": items} for m,items in modules.items()]
+    log.write(f"Scan result → {sum(len(m['items']) for m in outline)} items across {len(outline)} modules")
+    return outline
 
 
-def run_agent(course_input: str, chrome_profile: str, max_items: Optional[int] = None, use_copy_fallback: bool = True) -> RunResult:
-    slug = parse_slug_from_input(course_input)
-    result = RunResult(course_slug=slug)
+def click_by_title(page, title: str) -> bool:
+    for _ in range(10):
+        try:
+            page.get_by_text(title, exact=False).first.click(timeout=1200)
+            return True
+        except Exception:
+            try:
+                page.evaluate("(function(){ (document.scrollingElement||document.documentElement).scrollBy(0,600); })();")
+            except Exception:
+                try:
+                    page.mouse.wheel(0, 700)
+                except Exception:
+                    pass
+    return False
+
+
+def capture_text(page) -> str:
+    try:
+        txt = page.evaluate(js_call("mainText()")) or ""
+    except Exception:
+        txt = ""
+    if len(txt.strip()) < 40:
+        try:
+            # Select-all fallback (works in headless too by reading selection)
+            txt2 = page.evaluate("""
+            (function(){ try{ const sel=window.getSelection(); sel.removeAllRanges(); const r=document.createRange(); r.selectNodeContents(document.body); sel.addRange(r); const t=sel.toString()||''; sel.removeAllRanges(); return t.trim(); }catch(e){ return ''; } })();
+            """) or ""
+            if len(txt2.strip()) > len(txt.strip()):
+                txt = txt2
+        except Exception:
+            pass
+    return txt
+
+# ===============
+# GPT function-calling agent
+# ===============
+
+def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: str = "", api_key: str = "", model: str = "gpt-4o-mini", max_items: Optional[int] = None, log=None) -> RunState:
+    """Use GPT to orchestrate order/scrolling/capture via tool calls. Deterministic tools do the heavy lifting."""
+    # Open Playwright
+    sync_playwright, PWTimeoutError = ensure_playwright()
+    state = RunState(course_slug=slug)
     edit_url = COURSE_EDIT_TMPL.format(slug=slug)
 
-    with sync_playwright() as p:
-        try:
-            ctx = p.chromium.launch_persistent_context(
-                user_data_dir=chrome_profile,
-                channel="chrome",  # Use real Chrome for existing login
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-        except Exception as e:
-            result.errors.append(f"Failed to open Chrome profile. Close all Chrome windows and retry. Details: {e}")
-            return result
+    # --- LLM client
+    try:
+        import openai
+        if hasattr(openai, "OpenAI"):
+            # new SDK style, but fallback to old signature below if present
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY", ""))
+            use_new = True
+        else:
+            openai.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+            client = openai
+            use_new = False
+    except Exception as e:
+        st.error("openai package not installed. Add `openai` to requirements.txt.")
+        state.errors.append(str(e))
+        return state
 
+    with sync_playwright() as p:
+        if mode == "Local":
+            try:
+                ctx = p.chromium.launch_persistent_context(user_data_dir=chrome_profile, channel="chrome", headless=False, args=["--disable-blink-features=AutomationControlled"])  # noqa: E501
+            except Exception as e:
+                state.errors.append("Failed to open Chrome profile: " + str(e))
+                return state
+        else:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            if cauth_cookie:
+                try:
+                    ctx.add_cookies([{ "name":"CAUTH", "value": cauth_cookie, "domain": ".coursera.org", "path":"/", "httpOnly": True, "secure": True }])
+                except Exception:
+                    state.errors.append("Failed to set CAUTH cookie.")
         page = ctx.new_page()
         try:
             page.goto(edit_url, wait_until="domcontentloaded", timeout=120_000)
         except Exception as e:
-            result.errors.append(f"Failed to open {edit_url}: {e}")
-            ctx.close()
-            return result
+            state.errors.append("Failed to open editor: "+str(e))
+            ctx.close();
+            if mode != "Local":
+                browser.close()
+            return state
+        page.wait_for_timeout(3500)
+        if mode != "Local" and "login" in (page.url or "").lower():
+            state.errors.append("Not authenticated — provide a fresh CAUTH cookie.")
+            ctx.close();
+            if mode != "Local":
+                browser.close()
+            return state
 
-        # Give the SPA time to boot
-        page.wait_for_timeout(4000)
+        # ---------- Tool functions (Python side)
+        def tool_discover_outline() -> Dict[str, Any]:
+            outline = build_outline(page, log or st)
+            return {"outline": outline}
 
-        try:
-            outline = page.evaluate(deep_query_eval_script())
-        except Exception as e:
-            result.errors.append(f"Failed to build outline (shadow DOM traversal). Details: {e}")
-            ctx.close()
-            return result
+        def tool_click_and_capture(title: str) -> Dict[str, Any]:
+            ok = click_by_title(page, title)
+            wait_ready(page)
+            txt = capture_text(page) if ok else ""
+            mod = ""  # best-effort: we don't resolve module here
+            return {"clicked": ok, "text_len": len(txt), "text": txt, "module_guess": mod}
 
-        count = 0
-        for m_i, mod in enumerate(outline, start=1):
-            module_title = mod.get("moduleTitle", f"Module {m_i}")
-            items = mod.get("items", [])
-            for it_i, item in enumerate(items, start=1):
-                if max_items and count >= max_items:
-                    break
-                title = item.get("title", f"Item {it_i}")
-                itype = item.get("type", "page")
-
-                # Try to click by visible text
-                clicked = False
+        def tool_scroll(step: int = 800) -> Dict[str, Any]:
+            try:
+                page.evaluate(f"(function(){{ (document.scrollingElement||document.documentElement).scrollBy(0,{step}); }})();")
+            except Exception:
                 try:
-                    page.get_by_text(title, exact=False).first.click(timeout=7_000)
-                    clicked = True
-                except PWTimeoutError:
-                    # Try scrolling and retry
-                    try:
-                        page.mouse.wheel(0, 800)
-                        page.get_by_text(title, exact=False).first.click(timeout=7_000)
-                        clicked = True
-                    except Exception:
-                        result.errors.append(f"Could not click item: {title}")
-                        clicked = False
+                    page.mouse.wheel(0, step)
+                except Exception:
+                    pass
+            wait_ready(page, 200)
+            return {"scrolled": True}
 
-                wait_for_editor_ready(page)
+        # ---------- LLM loop
+        sys_prompt = (
+            "You are an automation agent that exports a Coursera course to a docx. "
+            "Use the provided tools to: 1) discover an outline, 2) click each item (skip duplicates), 3) capture the visible text. "
+            "Prefer deterministic iteration over fancy planning. Return a short progress note in 'thought' and always call a tool until you are ready to finish. "
+            "When all items captured (or a reasonable limit is reached), respond with JSON: {finish: true}."
+        )
 
-                # Capture content
-                content_text = ""
-                if clicked:
-                    try:
-                        content_text = page.evaluate(grab_visible_text_script()) or ""
-                    except Exception:
-                        content_text = ""
+        tools_spec = [
+            {"type": "function", "function": {"name": "discover_outline", "description": "Return module->items array for this course page.", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "click_and_capture", "description": "Click an item by visible title and return the captured text.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}},
+            {"type": "function", "function": {"name": "scroll_page", "description": "Scroll the page down to reveal more items.", "parameters": {"type": "object", "properties": {"step": {"type": "integer", "default": 800}}}}}
+        ]
 
-                    # If DOM text is tiny, try copy‑paste fallback
-                    if use_copy_fallback and len(content_text.strip()) < 40:
-                        try:
-                            # Focus body and select all → copy
-                            page.focus("body")
-                            page.keyboard.down("Control")
-                            page.keyboard.press("KeyA")
-                            page.keyboard.press("KeyC")
-                            page.keyboard.up("Control")
-                            time.sleep(0.3)
-                            cp = pyperclip.paste() or ""
-                            # Heuristic: if clipboard is much bigger, use it
-                            if len(cp.strip()) > len(content_text.strip()):
-                                content_text = cp
-                        except Exception:
-                            pass
+        # shared state for loop
+        outline_cache: List[Dict[str, Any]] = []
+        titles_in_order: List[str] = []
+        step_budget = 200
 
-                result.items.append(ItemRecord(
-                    module_index=m_i,
-                    module_title=module_title,
-                    item_index=it_i,
-                    item_type=itype,
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": json.dumps({"goal": f"Export course {slug}", "limit": max_items or 0})},
+        ]
+
+        def call_llm(msgs):
+            if 'OpenAI' in str(type(client)) or hasattr(client, 'responses'):
+                # new SDK
+                resp = client.responses.create(model=model, input=msgs, tools=tools_spec)
+                out = resp.output[0]
+                # Normalize to 'type': 'message' with 'content'
+                if out.type == 'tool_call':
+                    tc = out
+                    return {"tool": tc.function.name, "arguments": json.loads(tc.function.arguments or '{}')}
+                else:
+                    # plain text content
+                    return {"content": out.content[0].text.value if hasattr(out.content[0], 'text') else str(out)}
+            else:
+                # old SDK: Chat Completions with tools
+                resp = client.ChatCompletion.create(model=model, messages=msgs, tools=tools_spec, tool_choice="auto")
+                msg = resp["choices"][0]["message"]
+                if msg.get("tool_calls"):
+                    tc = msg["tool_calls"][0]
+                    name = tc["function"]["name"]
+                    args = json.loads(tc["function"]["arguments"] or "{}")
+                    return {"tool": name, "arguments": args}
+                else:
+                    return {"content": msg.get("content", "")}
+
+        while step_budget > 0:
+            step_budget -= 1
+            decision = call_llm(messages)
+
+            if decision.get("tool") == "discover_outline":
+                res = tool_discover_outline()
+                outline_cache = res.get("outline", [])
+                titles_in_order = [it.get("title") for m in outline_cache for it in m.get("items", [])]
+                messages.append({"role": "tool", "name": "discover_outline", "content": json.dumps({"found": len(titles_in_order)})})
+                if not titles_in_order:
+                    # try to scroll to reveal more and re-discover
+                    tool_scroll()
+                    continue
+                # Ask LLM to start with the first unseen title
+                next_title = next((t for t in titles_in_order if t and t not in state.seen_titles), None)
+                if next_title:
+                    messages.append({"role": "user", "content": json.dumps({"next": next_title})})
+                continue
+
+            if decision.get("tool") == "click_and_capture":
+                title = decision["arguments"].get("title")
+                if not title:
+                    # pick next locally
+                    title = next((t for t in titles_in_order if t and t not in state.seen_titles), None)
+                    if not title:
+                        messages.append({"role": "assistant", "content": json.dumps({"finish": True})})
+                        break
+                ok_txt = tool_click_and_capture(title)
+                state.seen_titles.add(title)
+                # create a record (module mapping best-effort)
+                # Find module from outline cache
+                mod_title = ""
+                mod_idx = 0
+                it_idx = 0
+                it_type = "page"
+                for mi, m in enumerate(outline_cache, start=1):
+                    for ii, it in enumerate(m.get("items", []), start=1):
+                        if it.get("title") == title:
+                            mod_title = m.get("moduleTitle", f"Module {mi}")
+                            mod_idx = mi
+                            it_idx = ii
+                            it_type = it.get("type", "page")
+                            break
+                    if mod_title:
+                        break
+                state.items.append(ItemRecord(
+                    module_index=mod_idx or 0,
+                    module_title=mod_title or "",
+                    item_index=it_idx or 0,
+                    item_type=it_type,
                     item_title=title,
-                    content_text=content_text,
+                    content_text=ok_txt.get("text", ""),
                 ))
+                messages.append({"role": "tool", "name": "click_and_capture", "content": json.dumps({"clicked": ok_txt.get("clicked"), "len": ok_txt.get("text_len")})})
+                if max_items and len(state.items) >= max_items:
+                    messages.append({"role": "assistant", "content": json.dumps({"finish": True})})
+                    break
+                continue
 
-                count += 1
-            if max_items and count >= max_items:
+            if decision.get("tool") == "scroll_page":
+                tool_scroll(**decision["arguments"])
+                messages.append({"role": "tool", "name": "scroll_page", "content": json.dumps({"ok": True})})
+                continue
+
+            # If we get plain content (no tool call), check if it signals finish
+            content = decision.get("content", "")
+            try:
+                maybe = json.loads(content) if content.strip().startswith("{") else {}
+            except Exception:
+                maybe = {}
+            if maybe.get("finish"):
                 break
+            # otherwise, nudge it to call a tool
+            messages.append({"role": "user", "content": json.dumps({"hint": "call a tool or return {finish:true}"})})
 
         ctx.close()
-        return result
+        if mode != "Local":
+            browser.close()
 
+    return state
 
-# -------------------------
-# Sidebar Controls
-# -------------------------
-st.sidebar.header("Settings")
-course_input = st.text_input(
-    "Coursera course URL or slug",
-    value="technical-assessment-testing-sandbox",
-    help="Paste the full /teach/.../content/edit URL or just the course slug.",
-)
+# ===============
+# Export helper
+# ===============
 
-default_profile = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data")
-chrome_profile = st.text_input(
-    "Chrome User Data directory",
-    value=default_profile,
-    help="Close all Chrome windows before running. Uses your logged‑in Chrome profile for SSO.",
-)
+def export_docx(state: RunState, outfile: str) -> str:
+    doc = Document()
+    h = doc.add_heading(f"Coursera Export: {state.course_slug}", 0)
+    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    doc.add_paragraph("")
 
-colA, colB, colC = st.columns([1,1,1])
-with colA:
-    max_items = st.number_input("Limit items (0 = all)", min_value=0, max_value=10_000, value=0, step=1)
-with colB:
-    use_copy = st.checkbox("Enable copy‑paste fallback", value=True)
-with colC:
-    export_name = st.text_input("Output .docx name", value="coursera_export.docx")
+    cur_mod = None
+    for rec in state.items:
+        if rec.module_title != cur_mod:
+            doc.add_heading(f"Module {rec.module_index}: {rec.module_title or 'Untitled'}", level=1)
+            cur_mod = rec.module_title
+        doc.add_heading(f"{rec.item_type.title()}: {rec.item_title}", level=2)
+        if rec.content_text.strip():
+            p = doc.add_paragraph(rec.content_text.strip())
+            p.paragraph_format.space_after = Pt(6)
+        else:
+            doc.add_paragraph("[Title only or non-text content]")
+        doc.add_paragraph("")
+    doc.save(outfile)
+    return outfile
 
-run_btn = st.button("▶️ Run Agent", type="primary")
+# ===============
+# UI
+# ===============
+mode = st.sidebar.radio("Run mode", ["Local (Chrome profile)", "Streamlit Cloud (headless)"])
+course_input = st.text_input("Course URL or slug", value="technical-assessment-testing-sandbox")
+slug = (re.search(r"/teach/([\w\-]+)/content/edit", course_input.strip()) or re.match(r"^[\w\-]+$", course_input.strip()))
 
-log_box = st.container(border=True)
-result_holder = st.empty()
+if mode.startswith("Local"):
+    default_profile = os.path.expanduser(r"~\\AppData\\Local\\Google\\Chrome\\User Data")
+    chrome_profile = st.text_input("Chrome User Data directory", value=default_profile)
+    cauth = ""
+else:
+    chrome_profile = ""
+    with st.expander("Cloud auth (Coursera)"):
+        cauth = st.text_input("CAUTH cookie", type="password")
 
-# -------------------------
-# Run
-# -------------------------
-if run_btn:
-    if not course_input.strip():
-        st.error("Please enter a course URL or slug.")
-    elif not os.path.isdir(chrome_profile):
-        st.error("Chrome profile path doesn't exist. Check the directory.")
-    else:
-        with st.status("Launching Chrome and building outline…", expanded=True) as status:
-            st.write(f"Target: **{course_input}**")
-            st.write(f"Chrome profile: `{chrome_profile}`")
-            try:
-                rr = run_agent(course_input, chrome_profile, max_items or None, use_copy)
-            except Exception as e:
-                st.exception(e)
-                st.stop()
+with st.sidebar:
+    api_key = st.text_input("OpenAI API Key", type="password", help="Required for agentic control")
+    model = st.text_input("Model", value="gpt-4o-mini")
+    max_items = st.number_input("Limit items (0 = all)", min_value=0, max_value=10000, value=0)
+    outfile = st.text_input("Output .docx name", value="coursera_export.docx")
 
-            if rr.errors:
-                st.warning("Some steps reported issues:")
-                for e in rr.errors:
-                    st.write("• " + e)
+run = st.button("▶️ Run GPT Agent", type="primary")
 
-            st.write(f"Captured **{len(rr.items)}** items.")
-            status.update(label="Exporting .docx…", state="running")
+if run:
+    if not api_key and not os.getenv("OPENAI_API_KEY"):
+        st.error("Provide an OpenAI API Key in the sidebar or env var OPENAI_API_KEY.")
+        st.stop()
+    slug_text = course_input.strip().strip('"')
+    slug_only = (re.search(r"/teach/([\w\-]+)/content/edit", slug_text) or re.match(r"^[\w\-]+$", slug_text))
+    if not slug_only:
+        st.error("Enter a course slug or the full /teach/.../content/edit URL.")
+        st.stop()
+    slug = re.search(r"/teach/([\w\-]+)/content/edit", slug_text)
+    slug = slug.group(1) if slug else slug_text
 
-        # Export docx
-        outfile = export_docx(rr, export_name)
-        with open(outfile, "rb") as f:
-            st.download_button(
-                label="⬇️ Download .docx",
-                data=f.read(),
-                file_name=os.path.basename(outfile),
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+    with st.status("Running agent…", expanded=True) as status:
+        st.write(f"Course: **{slug}** | Mode: {mode}")
+        rs = run_agentic("Local" if mode.startswith("Local") else "Cloud", slug, chrome_profile, cauth, api_key, model, max_items or None, log=st)
+        if rs.errors:
+            st.warning("Some issues were reported:")
+            for e in rs.errors:
+                st.write("• "+e)
+        st.write(f"Captured **{len(rs.items)}** items.")
+        status.update(label="Exporting .docx…", state="running")
 
-        # Quick preview table
-        st.subheader("Preview")
-        import pandas as pd
-        df = pd.DataFrame([
-            {
-                "Module #": it.module_index,
-                "Module": it.module_title,
-                "Type": it.item_type,
-                "Title": it.item_title,
-                "Snippet": (it.content_text[:180] + ("…" if len(it.content_text) > 180 else "")).replace("\n", " ")
-            }
-            for it in rr.items
-        ])
-        st.dataframe(df, use_container_width=True)
+    # export
+    fname = export_docx(rs, outfile)
+    with open(fname, "rb") as f:
+        st.download_button("⬇️ Download .docx", f.read(), file_name=os.path.basename(fname), mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        st.info("Upload the .docx to Google Drive and open as Google Doc, or import into Docs. If you want a Google Docs direct export with OAuth, I can add it next.")
+    # preview
+    st.subheader("Preview")
+    df = pd.DataFrame([
+        {"Module #": it.module_index, "Module": it.module_title, "Type": it.item_type, "Title": it.item_title, "Snippet": (it.content_text[:180] + ("…" if len(it.content_text) > 180 else "")).replace("\n"," ")}
+        for it in rs.items
+    ])
+    st.dataframe(df, use_container_width=True)
 
-# -------------------------
-# Footer Help
-# -------------------------
-st.markdown(
-    """
+st.markdown("""
 ---
-**Setup notes**
+**Setup (local)**
+```powershell
+pip install streamlit playwright python-docx pandas openai
+python -m playwright install chrome
+streamlit run app_agentic.py
+```
+**Cloud notes**
+- Add `openai` to requirements.txt; keep Chromium libs in packages.txt.
+- For Cloud auth, paste a fresh **CAUTH** cookie for coursera.org.
 
-1. Install dependencies (PowerShell):
-   ```powershell
-   pip install streamlit playwright python-docx pyperclip
-   python -m playwright install chrome
-   ```
-2. Close **all** Chrome windows before running (profile lock).
-3. Start the app:
-   ```powershell
-   streamlit run app.py
-   ```
-4. Paste your course slug (or full /teach/.../content/edit URL), confirm your Chrome profile path, and click **Run Agent**.
-
-**How it works**
-- Opens your course editor with your real Chrome profile.
-- Traverses the Shadow DOM to list modules & items.
-- Clicks each item → grabs visible text. If DOM text is tiny, tries a **copy‑paste** fallback (Ctrl+A/Ctrl+C) and reads from your clipboard.
-- Builds a structured .docx you can import to Google Docs.
-
-**Limitations**
-- Quizzes/LTI/external embeds may not expose text → you'll still get titles.
-- If the Coursera UI changes significantly, update selectors in `deep_query_eval_script()`.
-    """
-)
+**Privacy / ToS**
+- Only automate content you own or are allowed to export. This is a personal tool that mirrors your in-browser access.
+""")
