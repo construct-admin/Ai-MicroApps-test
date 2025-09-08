@@ -23,5 +23,5 @@ requests
 pillow
 pytesseract
 pysrt
-playwright==1.46.0
 pandas>=2.2
+playwright==1.46.0
