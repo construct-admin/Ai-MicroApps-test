@@ -5,7 +5,7 @@ import json
 import time
 import subprocess
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any
 
 import streamlit as st
 import pandas as pd
@@ -161,9 +161,11 @@ def build_outline(page, log) -> List[Dict[str, Any]]:
     # B) scroll + visible scan
     log.write("No outline found. Progressive scroll scan…")
     try:
-        page.evaluate("""
-        (function(){ try{ const lib=(%s); const sc = lib.guessScrollContainer(); sc && sc.setAttribute('data-agent-scroll-root','1'); }catch(e){} })();
-        """ % js_all_in_one())
+        page.evaluate(
+            """
+            (function(){ try{ const lib=(%s); const sc = lib.guessScrollContainer(); sc && sc.setAttribute('data-agent-scroll-root','1'); }catch(e){} })();
+            """ % js_all_in_one()
+        )
     except Exception:
         pass
 
@@ -172,7 +174,11 @@ def build_outline(page, log) -> List[Dict[str, Any]]:
 
     def scroll_down():
         try:
-            page.evaluate("(function(){ const sc=document.querySelector('[data-agent-scroll-root="1"]') || document.scrollingElement || document.documentElement; sc.scrollBy({top:800,behavior:'auto'}); })();")
+            page.evaluate(
+                """
+                (function(){ const sc=document.querySelector('[data-agent-scroll-root=\"1\"]') || document.scrollingElement || document.documentElement; sc.scrollBy({top:800,behavior:'auto'}); })();
+                """
+            )
         except Exception:
             try:
                 page.mouse.wheel(0, 800)
@@ -226,9 +232,11 @@ def capture_text(page) -> str:
     if len(txt.strip()) < 40:
         try:
             # Select-all fallback (works in headless too by reading selection)
-            txt2 = page.evaluate("""
-            (function(){ try{ const sel=window.getSelection(); sel.removeAllRanges(); const r=document.createRange(); r.selectNodeContents(document.body); sel.addRange(r); const t=sel.toString()||''; sel.removeAllRanges(); return t.trim(); }catch(e){ return ''; } })();
-            """) or ""
+            txt2 = page.evaluate(
+                """
+                (function(){ try{ const sel=window.getSelection(); sel.removeAllRanges(); const r=document.createRange(); r.selectNodeContents(document.body); sel.addRange(r); const t=sel.toString()||''; sel.removeAllRanges(); return t.trim(); }catch(e){ return ''; } })();
+                """
+            ) or ""
             if len(txt2.strip()) > len(txt.strip()):
                 txt = txt2
         except Exception:
@@ -238,6 +246,7 @@ def capture_text(page) -> str:
 # ===============
 # GPT function-calling agent
 # ===============
+
 
 def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: str = "", api_key: str = "", model: str = "gpt-4o-mini", max_items: Optional[int] = None, log=None) -> RunState:
     """Use GPT to orchestrate order/scrolling/capture via tool calls. Deterministic tools do the heavy lifting."""
@@ -344,18 +353,22 @@ def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: st
 
         def call_llm(msgs):
             if 'OpenAI' in str(type(client)) or hasattr(client, 'responses'):
-                # new SDK
-                resp = client.responses.create(model=model, input=msgs, tools=tools_spec)
-                out = resp.output[0]
-                # Normalize to 'type': 'message' with 'content'
-                if out.type == 'tool_call':
-                    tc = out
-                    return {"tool": tc.function.name, "arguments": json.loads(tc.function.arguments or '{}')}
-                else:
-                    # plain text content
-                    return {"content": out.content[0].text.value if hasattr(out.content[0], 'text') else str(out)}
+                # new SDK (Responses API). NOTE: behavior may vary by version.
+                try:
+                    resp = client.responses.create(model=model, input=msgs, tools=tools_spec)
+                    out = resp.output[0]
+                    if getattr(out, 'type', '') == 'tool_call':
+                        tc = out
+                        return {"tool": tc.function.name, "arguments": json.loads(tc.function.arguments or '{}')}
+                    else:
+                        # plain content
+                        first = out.content[0]
+                        text = getattr(getattr(first, 'text', None), 'value', None)
+                        return {"content": text or str(out)}
+                except Exception as e:
+                    return {"content": json.dumps({"finish": True, "error": str(e)})}
             else:
-                # old SDK: Chat Completions with tools
+                # legacy Chat Completions
                 resp = client.ChatCompletion.create(model=model, messages=msgs, tools=tools_spec, tool_choice="auto")
                 msg = resp["choices"][0]["message"]
                 if msg.get("tool_calls"):
@@ -379,7 +392,6 @@ def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: st
                     # try to scroll to reveal more and re-discover
                     tool_scroll()
                     continue
-                # Ask LLM to start with the first unseen title
                 next_title = next((t for t in titles_in_order if t and t not in state.seen_titles), None)
                 if next_title:
                     messages.append({"role": "user", "content": json.dumps({"next": next_title})})
@@ -388,29 +400,20 @@ def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: st
             if decision.get("tool") == "click_and_capture":
                 title = decision["arguments"].get("title")
                 if not title:
-                    # pick next locally
                     title = next((t for t in titles_in_order if t and t not in state.seen_titles), None)
                     if not title:
                         messages.append({"role": "assistant", "content": json.dumps({"finish": True})})
                         break
                 ok_txt = tool_click_and_capture(title)
                 state.seen_titles.add(title)
-                # create a record (module mapping best-effort)
-                # Find module from outline cache
-                mod_title = ""
-                mod_idx = 0
-                it_idx = 0
-                it_type = "page"
+                # module mapping
+                mod_title = ""; mod_idx = 0; it_idx = 0; it_type = "page"
                 for mi, m in enumerate(outline_cache, start=1):
                     for ii, it in enumerate(m.get("items", []), start=1):
                         if it.get("title") == title:
                             mod_title = m.get("moduleTitle", f"Module {mi}")
-                            mod_idx = mi
-                            it_idx = ii
-                            it_type = it.get("type", "page")
-                            break
-                    if mod_title:
-                        break
+                            mod_idx = mi; it_idx = ii; it_type = it.get("type", "page"); break
+                    if mod_title: break
                 state.items.append(ItemRecord(
                     module_index=mod_idx or 0,
                     module_title=mod_title or "",
@@ -430,7 +433,6 @@ def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: st
                 messages.append({"role": "tool", "name": "scroll_page", "content": json.dumps({"ok": True})})
                 continue
 
-            # If we get plain content (no tool call), check if it signals finish
             content = decision.get("content", "")
             try:
                 maybe = json.loads(content) if content.strip().startswith("{") else {}
@@ -438,7 +440,6 @@ def run_agentic(mode: str, slug: str, chrome_profile: str = "", cauth_cookie: st
                 maybe = {}
             if maybe.get("finish"):
                 break
-            # otherwise, nudge it to call a tool
             messages.append({"role": "user", "content": json.dumps({"hint": "call a tool or return {finish:true}"})})
 
         ctx.close()
@@ -545,4 +546,4 @@ streamlit run app_agentic.py
 
 **Privacy / ToS**
 - Only automate content you own or are allowed to export. This is a personal tool that mirrors your in-browser access.
-""")
+"""
