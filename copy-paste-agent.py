@@ -12,20 +12,21 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import pandas as pd
 
-# NOTE: Playwright is imported lazily after we try to ensure installation.
-
+# =========================
+# Streamlit Config
+# =========================
 st.set_page_config(page_title="Coursera → Doc Agent", page_icon="📋", layout="wide")
-st.title("📋 Coursera → Google Doc (agentic, copy‑paste fallback)")
+st.title("📋 Coursera → Google Doc (agentic copy‑paste)")
 st.caption(
-    "Local mode uses your Chrome profile. Cloud mode uses headless Chromium with optional CAUTH cookie.\n"
-    "The agent traverses Coursera /teach Shadow DOM, clicks items, extracts visible text, and exports a .docx."
+    "Works in two modes: Local (uses your Chrome profile) or Cloud (headless Chromium with CAUTH cookie).\n"
+    "Traverses the /teach/.../content/edit UI, clicks each item, extracts text (DOM or selection fallback), and exports a .docx."
 )
 
 COURSE_EDIT_TMPL = "https://www.coursera.org/teach/{slug}/content/edit"
 
-# -------------------------
-# Data models
-# -------------------------
+# =========================
+# Data Models
+# =========================
 @dataclass
 class ItemRecord:
     module_index: int
@@ -41,40 +42,32 @@ class RunResult:
     items: List[ItemRecord] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
-# -------------------------
-# Helpers
-# -------------------------
+# =========================
+# Playwright bootstrap (self‑healing)
+# =========================
 
-def parse_slug_from_input(user_input: str) -> str:
-    """Accept full /teach/.../content/edit URL or bare slug and return slug."""
-    url = user_input.strip().strip('"')
-    m = re.search(r"/teach/([\w\-]+)/content/edit", url)
-    if m:
-        return m.group(1)
-    return url.split("?")[0].split("/")[-1]
-
-
-def ensure_playwright_installed():
-    """Make sure Playwright and Chromium are ready. On Cloud we install Chromium at runtime."""
+def ensure_playwright():
+    """Import Playwright; if missing, pip‑install it; ensure Chromium is available."""
     try:
         import playwright  # noqa: F401
-    except ModuleNotFoundError:
-        st.error(
-            "Playwright is missing. Add `playwright==1.46.0` to requirements.txt (Cloud) "
-            "or run `pip install playwright` locally."
-        )
-        st.stop()
-
-    try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception:
-        # Ignore if already installed
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright==1.46.0"])  # pin for stability
+        except Exception as e:
+            st.error(f"Failed to pip‑install playwright: {e}")
+            st.stop()
+    try:
+        # Ensure Chromium is installed (no‑op if present)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception:
+        # Ignore if already present; Cloud may have it prebuilt via packages.txt
         pass
-
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError  # type: ignore
     return sync_playwright, PWTimeoutError
 
+# =========================
+# Shadow‑DOM helpers (executed in page)
+# =========================
 
 def deep_query_eval_script() -> str:
     return (
@@ -200,11 +193,22 @@ def grab_selection_text_script() -> str:
         """
     )
 
+# =========================
+# Misc helpers
+# =========================
 
-def wait_for_editor_ready(page, ms: int = 800):
+def parse_slug_from_input(user_input: str) -> str:
+    url = user_input.strip().strip('"')
+    m = re.search(r"/teach/([\w\-]+)/content/edit", url)
+    if m:
+        return m.group(1)
+    return url.split("?")[0].split("/")[-1]
+
+
+def wait_for_editor_ready(page, ms: int = 900):
     time.sleep(ms / 1000.0)
     try:
-        page.mouse.wheel(0, 300)
+        page.mouse.wheel(0, 420)
         time.sleep(0.2)
     except Exception:
         pass
@@ -224,8 +228,7 @@ def export_docx(run: RunResult, outfile: str) -> str:
         doc.add_heading(f"{rec.item_type.title()}: {rec.item_title}", level=2)
         if rec.content_text.strip():
             p = doc.add_paragraph(rec.content_text.strip())
-            p_format = p.paragraph_format
-            p_format.space_after = Pt(6)
+            p.paragraph_format.space_after = Pt(6)
         else:
             doc.add_paragraph("[Captured title only or non-text content (quiz/LTI/external).]")
         doc.add_paragraph("")
@@ -233,12 +236,12 @@ def export_docx(run: RunResult, outfile: str) -> str:
     doc.save(outfile)
     return outfile
 
-# -------------------------
-# Agent implementations
-# -------------------------
+# =========================
+# Agents (Local & Cloud)
+# =========================
 
 def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], use_selection_fallback: bool) -> RunResult:
-    sync_playwright, PWTimeoutError = ensure_playwright_installed()
+    sync_playwright, PWTimeoutError = ensure_playwright_installed = ensure_playwright()
     result = RunResult(course_slug=slug)
     edit_url = COURSE_EDIT_TMPL.format(slug=slug)
 
@@ -251,10 +254,7 @@ def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], us
                 args=["--disable-blink-features=AutomationControlled"],
             )
         except Exception as e:
-            result.errors.append(
-                "Failed to open Chrome profile. Close all Chrome windows and retry. "
-                f"Details: {e}"
-            )
+            result.errors.append("Failed to open Chrome profile. Close all Chrome windows and retry. Details: " + str(e))
             return result
 
         page = ctx.new_page()
@@ -262,15 +262,15 @@ def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], us
             page.goto(edit_url, wait_until="domcontentloaded", timeout=120_000)
         except Exception as e:
             result.errors.append(f"Failed to open {edit_url}: {e}")
-            ctx.close()
+            ctx.close();
             return result
 
         page.wait_for_timeout(4000)
         try:
             outline = page.evaluate(deep_query_eval_script())
         except Exception as e:
-            result.errors.append(f"Failed to build outline. Details: {e}")
-            ctx.close()
+            result.errors.append("Failed to build outline (shadow DOM). Details: " + str(e))
+            ctx.close();
             return result
 
         count = 0
@@ -292,7 +292,7 @@ def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], us
                         page.get_by_text(title, exact=False).first.click(timeout=7_000)
                         clicked = True
                     except Exception:
-                        result.errors.append(f"Could not click item: {title}")
+                        result.errors.append("Could not click item: " + title)
                         clicked = False
 
                 wait_for_editor_ready(page)
@@ -310,16 +310,14 @@ def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], us
                         except Exception:
                             pass
 
-                result.items.append(
-                    ItemRecord(
-                        module_index=m_i,
-                        module_title=module_title,
-                        item_index=it_i,
-                        item_type=itype,
-                        item_title=title,
-                        content_text=content_text,
-                    )
-                )
+                result.items.append(ItemRecord(
+                    module_index=m_i,
+                    module_title=module_title,
+                    item_index=it_i,
+                    item_type=itype,
+                    item_title=title,
+                    content_text=content_text,
+                ))
                 count += 1
             if max_items and count >= max_items:
                 break
@@ -329,7 +327,7 @@ def run_agent_local(slug: str, chrome_profile: str, max_items: Optional[int], us
 
 
 def run_agent_cloud(slug: str, cauth_cookie: Optional[str], max_items: Optional[int], use_selection_fallback: bool) -> RunResult:
-    sync_playwright, PWTimeoutError = ensure_playwright_installed()
+    sync_playwright, PWTimeoutError = ensure_playwright()
     result = RunResult(course_slug=slug)
     edit_url = COURSE_EDIT_TMPL.format(slug=slug)
 
@@ -342,28 +340,27 @@ def run_agent_cloud(slug: str, cauth_cookie: Optional[str], max_items: Optional[
                     {"name": "CAUTH", "value": cauth_cookie, "domain": ".coursera.org", "path": "/", "httpOnly": True, "secure": True}
                 ])
         except Exception:
-            result.errors.append("Failed to set CAUTH cookie. You may need a fresh value.")
+            result.errors.append("Failed to set CAUTH cookie. Use a fresh value.")
 
         page = ctx.new_page()
         try:
             page.goto(edit_url, wait_until="domcontentloaded", timeout=120_000)
         except Exception as e:
             result.errors.append(f"Failed to open {edit_url}: {e}")
-            ctx.close(); browser.close()
+            ctx.close(); browser.close();
             return result
 
         page.wait_for_timeout(4000)
-
         if "login" in (page.url or "").lower():
-            result.errors.append("Not authenticated. Provide a CAUTH cookie in the sidebar to scrape on Cloud.")
-            ctx.close(); browser.close()
+            result.errors.append("Not authenticated. Provide a CAUTH cookie in the sidebar.")
+            ctx.close(); browser.close();
             return result
 
         try:
             outline = page.evaluate(deep_query_eval_script())
         except Exception as e:
-            result.errors.append(f"Failed to build outline. Details: {e}")
-            ctx.close(); browser.close()
+            result.errors.append("Failed to build outline (shadow DOM). Details: " + str(e))
+            ctx.close(); browser.close();
             return result
 
         count = 0
@@ -385,7 +382,7 @@ def run_agent_cloud(slug: str, cauth_cookie: Optional[str], max_items: Optional[
                         page.get_by_text(title, exact=False).first.click(timeout=7_000)
                         clicked = True
                     except Exception:
-                        result.errors.append(f"Could not click item: {title}")
+                        result.errors.append("Could not click item: " + title)
                         clicked = False
 
                 wait_for_editor_ready(page)
@@ -403,16 +400,14 @@ def run_agent_cloud(slug: str, cauth_cookie: Optional[str], max_items: Optional[
                         except Exception:
                             pass
 
-                result.items.append(
-                    ItemRecord(
-                        module_index=m_i,
-                        module_title=module_title,
-                        item_index=it_i,
-                        item_type=itype,
-                        item_title=title,
-                        content_text=content_text,
-                    )
-                )
+                result.items.append(ItemRecord(
+                    module_index=m_i,
+                    module_title=module_title,
+                    item_index=it_i,
+                    item_type=itype,
+                    item_title=title,
+                    content_text=content_text,
+                ))
                 count += 1
             if max_items and count >= max_items:
                 break
@@ -420,9 +415,9 @@ def run_agent_cloud(slug: str, cauth_cookie: Optional[str], max_items: Optional[
         ctx.close(); browser.close()
         return result
 
-# -------------------------
-# UI controls
-# -------------------------
+# =========================
+# UI
+# =========================
 mode = st.sidebar.radio("Run mode", ["Local (Chrome profile)", "Streamlit Cloud (headless)"])
 course_input = st.text_input(
     "Coursera course URL or slug",
@@ -436,7 +431,7 @@ use_selection = st.sidebar.checkbox("Enable selection fallback (no clipboard)", 
 export_name = st.sidebar.text_input("Output .docx name", value="coursera_export.docx")
 
 if mode.startswith("Local"):
-    default_profile = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data")
+    default_profile = os.path.expanduser(r"~\\AppData\\Local\\Google\\Chrome\\User Data")
     chrome_profile = st.text_input(
         "Chrome User Data directory (local only)",
         value=default_profile,
@@ -447,43 +442,51 @@ else:
 
 if mode.startswith("Streamlit"):
     with st.expander("Advanced auth (Cloud)"):
-        st.markdown("**Recommended:** Paste your Coursera `CAUTH` cookie value (Application → Cookies). Treat it like a password.")
+        st.markdown("Paste your Coursera **CAUTH** cookie (DevTools → Application → Cookies → coursera.org). Treat it like a password.")
         cauth_cookie = st.text_input("CAUTH cookie", type="password")
 else:
     cauth_cookie = None
 
 run_btn = st.button("▶️ Run Agent", type="primary")
 
-# -------------------------
-# Execute
-# -------------------------
+# =========================
+# Exec
+# =========================
 if run_btn:
     if not slug:
         st.error("Please enter a course URL or slug.")
         st.stop()
 
-    if mode.startswith("Local") and not os.path.isdir(chrome_profile):
-        st.error("Chrome profile path doesn't exist. Check the directory.")
-        st.stop()
-
     limit = max_items or None
 
-    with st.status("Running…", expanded=True) as status:
-        st.write(f"Mode: **{mode}**  |  Course: **{slug}**")
-
-        if mode.startswith("Local"):
+    if mode.startswith("Local"):
+        if not os.path.isdir(chrome_profile):
+            st.error("Chrome profile path doesn't exist. Check the directory.")
+            st.stop()
+        with st.status("Running locally…", expanded=True) as status:
+            st.write(f"Course: **{slug}**  |  Profile: `{chrome_profile}`")
             rr = run_agent_local(slug, chrome_profile, limit, use_selection)
-        else:
+            if rr.errors:
+                st.warning("Some issues were reported:")
+                for e in rr.errors:
+                    st.write("• " + e)
+            st.write(f"Captured **{len(rr.items)}** items.")
+            status.update(label="Exporting .docx…", state="running")
+    else:
+        with st.status("Running headless on Cloud…", expanded=True) as status:
+            st.write(f"Course: **{slug}**")
+            if not cauth_cookie:
+                st.error("Not authenticated. Provide a CAUTH cookie in the sidebar.")
+                st.stop()
             rr = run_agent_cloud(slug, cauth_cookie, limit, use_selection)
+            if rr.errors:
+                st.warning("Some issues were reported:")
+                for e in rr.errors:
+                    st.write("• " + e)
+            st.write(f"Captured **{len(rr.items)}** items.")
+            status.update(label="Exporting .docx…", state="running")
 
-        if rr.errors:
-            st.warning("Some issues were reported:")
-            for e in rr.errors:
-                st.write("• " + e)
-
-        st.write(f"Captured **{len(rr.items)}** items.")
-        status.update(label="Exporting .docx…", state="running")
-
+    # Export
     outfile = export_docx(rr, export_name)
     with open(outfile, "rb") as f:
         st.download_button(
@@ -493,6 +496,7 @@ if run_btn:
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
+    # Preview
     st.subheader("Preview")
     df = pd.DataFrame([
         {
@@ -506,7 +510,49 @@ if run_btn:
     ])
     st.dataframe(df, use_container_width=True)
 
-    st.info(
-        "Upload the .docx to Google Drive and open as Google Doc. For direct Docs API export, "
-        "we can add OAuth on demand."
-    )
+    st.info("Upload the .docx to Google Drive and open as Google Doc. For direct Docs API export, I can wire OAuth next.")
+
+# =========================
+# Deploy notes (optional)
+# =========================
+st.markdown(
+    """
+---
+### Setup (Local)
+```powershell
+pip install streamlit playwright python-docx pandas
+python -m playwright install chrome
+streamlit run app.py
+```
+
+### Setup (Streamlit Cloud)
+- **requirements.txt**
+```
+streamlit>=1.36
+playwright==1.46.0
+python-docx>=1.1
+pandas>=2.2
+```
+- **packages.txt** (Chromium libs)
+```
+libnss3
+libnspr4
+libatk1.0-0
+libatk-bridge2.0-0
+libdrm2
+libxcomposite1
+libxdamage1
+libxfixes3
+libgbm1
+libpango-1.0-0
+libasound2
+libatspi2.0-0
+libxrandr2
+libgtk-3-0
+libxkbcommon0
+libx11-xcb1
+libxcb1
+```
+- The app will attempt runtime `pip install playwright` and `playwright install chromium` if needed.
+    """
+)
