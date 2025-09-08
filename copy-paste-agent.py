@@ -547,3 +547,4 @@ streamlit run app_agentic.py
 **Privacy / ToS**
 - Only automate content you own or are allowed to export. This is a personal tool that mirrors your in-browser access.
 """
+)
