@@ -59,11 +59,16 @@ with tab1:
                             st.error("Canvas settings are required in the sidebar."); st.stop()
                         # Create quiz
                         created = create_new_quiz(canvas_domain, course_id, quiz_title, description, canvas_token)
-                        if not created:
-                            st.error("Failed to create New Quiz."); st.stop()
-                        assignment_id = created.get("assignment_id")
-                        if not assignment_id:
-                            st.error("No assignment_id returned from create_new_quiz."); st.stop()
+
+                    # Show HTTP debug if it didn’t come back with an assignment id
+                    if not created or not created.get("assignment_id"):
+                        st.error("Create New Quiz did not return an assignment_id.")
+                        st.caption("Canvas response attempts:")
+                        st.code(json.dumps(created.get("http_debug", {}), indent=2), language="json")
+                        st.stop()
+
+                        assignment_id = created["assignment_id"]
+
 
                         builder = NewQuizItemBuilder()
                         success_ct = 0
