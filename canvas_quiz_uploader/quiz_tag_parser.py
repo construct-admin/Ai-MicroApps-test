@@ -6,14 +6,11 @@ def _strip(s: str) -> str:
     return (s or "").strip()
 
 def _normalize(text: str) -> str:
-    # Normalize DOCX exports and whitespace
     text = (text or "").replace("\u00A0", " ")
     text = text.replace("•", "- ").replace("–", "- ")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text
 
-# Recognize option markers:
-#   "* " (correct), "- " (plain), "A) ", "a) ", "1) ", "A. ", "1. "
 _OPTION_RE = re.compile(r"""^(
     \* \s |                 # "* "
     - \s |                  # "- "
@@ -33,30 +30,27 @@ def _is_shuffle_flag(line: str) -> bool:
 
 class QuizTagParser:
     """
-    Parses concise quiz tags inside <quiz_start>...</quiz_end> (or </quiz>) in a <canvas_page>.
+    Parses <quiz_start>...</quiz_end> blocks inside a <canvas_page>.
+    Produces a normalized list of questions for New Quizzes builder.
     Supported types:
       multiple_choice, multiple_answer, true_false, short_answer, essay, numeric,
       matching, ordering, categorization, fill_in_blank
     """
     def parse(self, raw_block: str) -> Dict[str, Any]:
         raw_block = _normalize(raw_block)
-        # accept </quiz_end> OR </quiz>
         m = re.search(r"<quiz_start\b[^>]*>\s*([\s\S]+?)\s*</\s*(?:quiz_end|quiz)\s*>",
                       raw_block, re.IGNORECASE)
         if not m:
             return {"questions": []}
         txt = m.group(1)
 
-        # extract <question> blocks
-        q_blocks = re.findall(r"<question\b[^>]*>\s*([\s\S]+?)\s*</\s*question\s*>",
-                              txt, re.IGNORECASE)
-
+        q_blocks = re.findall(r"<question\b[^>]*>\s*([\s\S]+?)\s*</\s*question\s*>", txt, re.IGNORECASE)
         questions: List[Dict[str, Any]] = []
+
         for qidx, qb in enumerate(q_blocks, start=1):
             qb = _normalize(qb)
             lines = [ln.rstrip() for ln in qb.strip().splitlines() if _strip(ln)]
 
-            # detect type
             joined = "\n".join(lines)
             if re.search(r"<\s*multiple_answers\s*>", joined, re.IGNORECASE):
                 qtype = "multiple_answer"
@@ -79,14 +73,10 @@ class QuizTagParser:
             else:
                 qtype = "multiple_choice"
 
-            # shuffle flags
             shuffle = True
             if re.search(r"<\s*no_shuffle\s*>", joined, re.IGNORECASE):
                 shuffle = False
-            elif re.search(r"<\s*shuffle\s*>", joined, re.IGNORECASE):
-                shuffle = True
 
-            # accumulators
             prompt_lines: List[str] = []
             answers: List[Dict[str, Any]] = []
             q_fb = {"correct": None, "incorrect": None, "neutral": None}
@@ -108,7 +98,6 @@ class QuizTagParser:
                     continue
                 lower = l.lower()
 
-                # question-level feedback
                 if lower.startswith("feedback_correct:"):
                     q_fb["correct"] = _strip(l.split(":", 1)[1]); continue
                 if lower.startswith("feedback_incorrect:"):
@@ -116,7 +105,6 @@ class QuizTagParser:
                 if lower.startswith("feedback_neutral:"):
                     q_fb["neutral"] = _strip(l.split(":", 1)[1]); continue
 
-                # type-specific parsing
                 if qtype == "true_false" and lower.startswith("correct:"):
                     rhs = _strip(l.split(":", 1)[1])
                     tf_correct = rhs.lower() in ["true", "t", "1", "yes"]; continue
@@ -176,10 +164,8 @@ class QuizTagParser:
                             categories[-1]["items"].append(_strip(l.lstrip("-* "))); continue
                         state = "stem"
 
-                # MCQ / MSQ options — only treat lines that LOOK like options
                 if qtype in ["multiple_choice", "multiple_answer"] and _OPTION_RE.match(l):
                     is_correct = l.startswith("* ")
-                    # remove the marker
                     opt = l[2:] if is_correct else _strip(_OPTION_RE.sub("", l, count=1))
                     fb = None
                     if " <feedback>" in opt:
@@ -192,7 +178,6 @@ class QuizTagParser:
                     })
                     continue
 
-                # Otherwise it's part of the stem
                 prompt_lines.append(l)
 
             prompt_html = "<p>" + "</p><p>".join([_strip(x) for x in prompt_lines if _strip(x)]) + "</p>" if prompt_lines else "<p></p>"
