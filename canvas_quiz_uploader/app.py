@@ -2,6 +2,7 @@ import streamlit as st
 import json
 from pathlib import Path
 from typing import Dict, Any, List
+import time
 
 from canvas_api import (
     add_to_module,
@@ -31,6 +32,34 @@ with st.sidebar:
     st.caption("Question types: " + ", ".join(sorted(SUPPORTED_TYPES)))
 
 tab1, tab2 = st.tabs(["Upload Storyboard", "Quick Test"])
+
+def _ensure_items(canvas_domain, course_id, assignment_id, expected_count, token, poll_secs=6, attempts=6):
+    from canvas_api import get_new_quiz_items
+    last = None
+    for _ in range(attempts):
+        status, data = get_new_quiz_items(canvas_domain, course_id, assignment_id, token)
+        if isinstance(data, list) and len(data) >= expected_count:
+            return True, data
+        last = (status, data)
+        time.sleep(poll_secs)
+    return False, last
+
+def _repost_missing(canvas_domain, course_id, assignment_id, qs, have_items, token):
+    from new_quiz_items import NewQuizItemBuilder, post_new_quiz_item
+    existing_by_pos = {int(it.get("position", 0)): it for it in have_items} if isinstance(have_items, list) else {}
+    intended_positions = set(range(1, len(qs) + 1))
+    missing_positions = [p for p in sorted(intended_positions) if p not in existing_by_pos]
+    builder = NewQuizItemBuilder()
+    results = []
+    for pos in missing_positions:
+        payload = builder.build_item(qs[pos - 1])
+        r = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, token, position=pos)
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        results.append({"pos": pos, "status": getattr(r, "status_code", None), "body": body})
+    return results
 
 with tab1:
     st.subheader("Upload Storyboard (.docx or .txt)")
@@ -185,6 +214,21 @@ with tab1:
                             # e) publish and give a direct link (less likely to hang than the inline Build iframe)
                             if publish_assignment(canvas_domain, course_id, assignment_id, canvas_token):
                                 st.success("Assignment published.")
+
+                                # Verify & auto-heal
+                            ok, items_or_last = _ensure_items(canvas_domain, course_id, assignment_id, len(qs), canvas_token)
+                            if not ok:
+                                st.warning("Items service didn’t return all items yet; attempting auto-repair…")
+                                readded = _repost_missing(canvas_domain, course_id, assignment_id, qs, items_or_last[1], canvas_token)
+                                st.code(json.dumps(readded, indent=2), language="json")
+                                # poll again after re-post
+                                ok2, items_or_last2 = _ensure_items(canvas_domain, course_id, assignment_id, len(qs), canvas_token, poll_secs=4, attempts=4)
+                                st.caption(f"Post-repair GET status: {items_or_last2[0] if not ok2 else 'OK'}")
+                                st.code(json.dumps(items_or_last2 if ok2 else items_or_last2[1], indent=2), language="json")
+                            else:
+                                st.caption("Items present on server:")
+                                st.code(json.dumps(items_or_last, indent=2), language="json")
+
                             st.markdown(f"[Open in Canvas]({assignment_url(canvas_domain, course_id, assignment_id)})")
 
                         # Direct link to open it in Canvas (use this instead of the spinning Build route)
