@@ -203,10 +203,17 @@ class NewQuizItemBuilder:
 
         return {"item": base}
 
-def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: Dict[str, Any], token: str, position=None):
+def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
     if position is not None:
         item_payload["item"]["position"] = int(position)
     url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
-    # Items API accepts "item" as form-encoded JSON, but JSON body works on most sites.
-    r = requests.post(url, headers=H(token), data={"item": json.dumps(item_payload["item"])}, timeout=60)
-    return r
+
+    # Attempt 1: form-encoded "item=<json>"
+    r1 = requests.post(url, headers=H(token), data={"item": json.dumps(item_payload["item"])}, timeout=60)
+    if r1.status_code in (200, 201):
+        return r1
+
+    # Attempt 2: JSON body (some tenants prefer this)
+    r2 = requests.post(url, headers={**H(token), "Content-Type": "application/json"},
+                       json=item_payload, timeout=60)
+    return r2
