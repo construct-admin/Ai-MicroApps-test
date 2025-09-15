@@ -1,6 +1,6 @@
 # canvas_api.py
-from typing import Optional, Dict, Any
-import requests, json
+from typing import Optional, Dict, Any, Tuple
+import json, requests
 
 def BASE(domain: str) -> str:
     return f"https://{domain}" if not domain.startswith("http") else domain
@@ -8,154 +8,85 @@ def BASE(domain: str) -> str:
 def H(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
-# ---------- helpers ----------
-
-def _extract_assignment_id(data: Dict[str, Any]) -> Optional[int]:
-    if not isinstance(data, dict):
-        return None
-    return (
-        data.get("assignment_id")
-        or (data.get("quiz") or {}).get("assignment_id")
-        or (data.get("data") or {}).get("assignment_id")
-        or (data.get("result") or {}).get("assignment_id")
-    )
-
-def _find_assignment_id_for_new_quiz(domain: str, course_id: str, title: str, token: str) -> Optional[int]:
-    """Fallback: search Assignments for a likely New Quiz matching the title."""
-    url = f"{BASE(domain)}/api/v1/courses/{course_id}/assignments"
-    params = {"search_term": title, "per_page": 100}
-    r = requests.get(url, headers=H(token), params=params, timeout=60)
-    if r.status_code != 200:
-        return None
-    try:
-        items = r.json()
-    except Exception:
-        items = []
-    if not isinstance(items, list):
-        items = []
-
-    # Prefer External Tool assignments whose launch URL looks like New Quizzes
-    candidates = []
-    for a in items:
-        if "external_tool" in (a.get("submission_types") or []):
-            ett = a.get("external_tool_tag_attributes") or {}
-            url_hint = (ett.get("url") or "").lower()
-            if any(k in url_hint for k in ["quizzes-next", "quizzes.next", "new_quiz", "new-quizzes", "quizzes"]):
-                candidates.append(a)
-    if candidates:
-        # newest first
-        candidates.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
-        return candidates[0].get("id")
-
-    # else: exact title match, newest first
-    same_title = [a for a in items if (a.get("name") or "") == title]
-    if same_title:
-        same_title.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
-        return same_title[0].get("id")
-    return None
-
-def is_new_quizzes_enabled(domain: str, course_id: str, token: str) -> Optional[bool]:
-    """Checks the course feature flags for New Quizzes."""
-    url = f"{BASE(domain)}/api/v1/courses/{course_id}/features/enabled"
-    r = requests.get(url, headers=H(token), timeout=60)
-    if r.status_code != 200:
-        return None  # unknown
-    try:
-        flags = r.json()
-    except Exception:
-        return None
-    if not isinstance(flags, list):
-        return None
-    known = {"quizzes_next", "quizzes.next", "new_quizzes"}
-    return any(f in flags for f in known)
-
-# ---------- main API you call from the app ----------
-
-def create_new_quiz(domain: str, course_id: str, title: str, description: str, token: str) -> Dict[str, Any]:
-    """
-    Create a New Quiz shell and return:
-      {
-        "assignment_id": <int or None>,
-        "raw": <create response or error body>,
-        "http_debug": {"attempts":[...]}
-      }
-    Never raises; the caller can decide what to do if assignment_id is None.
-    """
-    http_attempts = []
-
-    # Optional preflight: is New Quizzes enabled?
-    enabled = is_new_quizzes_enabled(domain, course_id, token)
-    if enabled is False:
-        return {
-            "assignment_id": None,
-            "raw": {"error": "New Quizzes not enabled for this course/account."},
-            "http_debug": {"preflight": "feature flag disabled"}
-        }
-
-    # 1) Try JSON payload
-    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes"
-    payload = {"title": title, "description": description or "", "points_possible": 0}
-    r1 = requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=payload, timeout=60)
-    http_attempts.append({"where": "json", "status": r1.status_code, "body": safe_body(r1)})
-
-    if r1.status_code in (200, 201):
-        data = r1.json()
-        aid = _extract_assignment_id(data) or _find_assignment_id_for_new_quiz(domain, course_id, title, token)
-        return {"assignment_id": aid, "raw": data, "http_debug": {"attempts": http_attempts}}
-
-    # 2) Some tenants only accept form-encoded fields
-    form = {"quiz[title]": title, "quiz[description]": description or "", "quiz[points_possible]": 0}
-    r2 = requests.post(url, headers=H(token), data=form, timeout=60)
-    http_attempts.append({"where": "form", "status": r2.status_code, "body": safe_body(r2)})
-
-    if r2.status_code in (200, 201):
-        data = r2.json()
-        aid = _extract_assignment_id(data) or _find_assignment_id_for_new_quiz(domain, course_id, title, token)
-        return {"assignment_id": aid, "raw": data, "http_debug": {"attempts": http_attempts}}
-
-    # 3) Hard failure — return details (don’t raise)
-    return {
-        "assignment_id": None,
-        "raw": {"error": "Create New Quiz failed"},
-        "http_debug": {"attempts": http_attempts}
-    }
-
 def safe_body(r: requests.Response) -> Any:
     try:
         return r.json()
     except Exception:
-        try:
-            return r.text
-        except Exception:
-            return "<unreadable>"
+        return r.text
 
-def add_to_module(domain: str, course_id: str, module_id: str, item_type: str, ref_id: str, title: str, token: str) -> bool:
-    url = f"{BASE(domain)}/api/v1/courses/{course_id}/modules/{module_id}/items"
-    data = {
-        "module_item[type]": item_type,            # "Assignment" for New Quizzes
-        "module_item[content_id]": ref_id,         # assignment_id
-        "module_item[title]": title,
-        "module_item[indent]": 0,
-        "module_item[published]": True
+# ---------- New Quizzes (create quiz shell) ----------
+# POST /api/quiz/v1/courses/:course_id/quizzes
+# Returns an object containing assignment_id (the assignment backing the New Quiz).
+# Ref: New Quizzes API → Create a new quiz. :contentReference[oaicite:1]{index=1}
+def create_new_quiz(domain: str, course_id: str, title: str, description: str, token: str) -> Dict[str, Any]:
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes"
+    attempts = []
+
+    # JSON first
+    payload = {"title": title, "instructions": description or "", "points_possible": 0}
+    r1 = requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json={"quiz": payload}, timeout=60)
+    attempts.append({"where": "json", "status": r1.status_code, "body": safe_body(r1)})
+    if r1.status_code in (200, 201):
+        data = r1.json()
+        return {
+            "assignment_id": data.get("assignment_id") or (data.get("quiz") or {}).get("assignment_id"),
+            "raw": data,
+            "http_debug": {"attempts": attempts},
+        }
+
+    # Form fallback (some tenants)
+    form = {
+        "quiz[title]": title,
+        "quiz[instructions]": description or "",
+        "quiz[points_possible]": 0,
     }
-    r = requests.post(url, headers=H(token), data=data, timeout=60)
-    return r.status_code in (200, 201)
+    r2 = requests.post(url, headers=H(token), data=form, timeout=60)
+    attempts.append({"where": "form", "status": r2.status_code, "body": safe_body(r2)})
+    if r2.status_code in (200, 201):
+        data = r2.json()
+        return {
+            "assignment_id": data.get("assignment_id") or (data.get("quiz") or {}).get("assignment_id"),
+            "raw": data,
+            "http_debug": {"attempts": attempts},
+        }
 
-def get_new_quiz_items(domain: str, course_id: str, assignment_id: int, token: str):
+    return {"assignment_id": None, "raw": None, "http_debug": {"attempts": attempts}}
+
+# ---------- Quiz Items CRUD ----------
+# POST /api/quiz/v1/courses/:course_id/quizzes/:assignment_id/items
+# PATCH /api/quiz/v1/courses/:course_id/quizzes/:assignment_id/items/:item_id
+# GET   /api/quiz/v1/courses/:course_id/quizzes/:assignment_id/items
+# Ref: New Quiz Items API. :contentReference[oaicite:2]{index=2}
+def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str):
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
+    return requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=item_payload, timeout=60)
+
+def update_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_id: str, item_payload: dict, token: str):
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items/{item_id}"
+    return requests.patch(url, headers={**H(token), "Content-Type": "application/json"}, json=item_payload, timeout=60)
+
+def get_new_quiz_items(domain: str, course_id: str, assignment_id: str, token: str) -> Tuple[int, Any]:
     url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
     r = requests.get(url, headers=H(token), timeout=60)
     try:
-        data = r.json()
+        return r.status_code, r.json()
     except Exception:
-        data = {"status": r.status_code, "text": r.text}
-    return r.status_code, data
+        return r.status_code, r.text
 
-def update_new_quiz_item(domain: str, course_id: str, assignment_id: int, item_id: str, item_payload: dict, token: str):
-    """PUT the item back to the API (forces a content refresh)."""
-    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items/{item_id}"
-    r = requests.put(url, headers=H(token), data={"item": json.dumps(item_payload["item"])}, timeout=60)
-    return r
+# ---------- Hot-Spot helper ----------
+# GET /api/quiz/v1/courses/:course_id/quizzes/:assignment_id/items/media_upload_url
+# Use to obtain a presigned URL for the hotspot image. :contentReference[oaicite:3]{index=3}
+def get_items_media_upload_url(domain: str, course_id: str, assignment_id: str, token: str) -> Optional[str]:
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items/media_upload_url"
+    r = requests.get(url, headers=H(token), timeout=60)
+    if r.status_code == 200:
+        try:
+            return r.json().get("url")
+        except Exception:
+            return None
+    return None
 
+# ---------- (optional) publish assignment shell via classic Assignments API ----------
 def publish_assignment(domain: str, course_id: str, assignment_id: int, token: str) -> bool:
     url = f"{BASE(domain)}/api/v1/courses/{course_id}/assignments/{assignment_id}"
     r = requests.put(url, headers=H(token), data={"assignment[published]": True}, timeout=60)
