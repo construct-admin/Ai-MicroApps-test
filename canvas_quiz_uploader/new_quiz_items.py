@@ -1,4 +1,3 @@
-# new_quiz_items.py
 import uuid, json, requests, time, re
 from typing import Dict, Any, List, Tuple
 from canvas_api import BASE, H
@@ -17,7 +16,6 @@ def _label(s: str) -> Dict[str, str]:
     return {"text": s, "item_body": s}
 
 def _extract_paragraph_texts(html: str) -> List[str]:
-    """Return inner text of <p>...</p> blocks, stripped of tags/whitespace."""
     if not html:
         return []
     paras = re.findall(r"(?is)<p[^>]*>(.*?)</p>", html)
@@ -29,25 +27,73 @@ def _extract_paragraph_texts(html: str) -> List[str]:
     return out
 
 def _split_prompt_and_inline_options(prompt_html: str) -> Tuple[str, List[str]]:
-    """
-    First <p> = question. Remaining <p> blocks are potential options.
-    Trim inline feedback like '3  Off by one' -> '3'.
-    """
     paras = _extract_paragraph_texts(prompt_html)
     if not paras:
         return prompt_html or "", []
-
     q_text = paras[0]
     opts = []
     for raw in paras[1:]:
         s = raw.lstrip("*").strip()
-        if "  " in s:  # two+ spaces separates option from feedback in your examples
-            s = s.split("  ", 1)[0].strip()
+        # trim “option  feedback” patterns (two+ spaces between)
+        s = s.split("  ", 1)[0].strip() if "  " in s else s
         if s:
             opts.append(s)
-
     clean_prompt = f"<p>{q_text}</p>"
     return clean_prompt, opts
+
+def _ensure_min_choices_for_mc(entry: Dict[str, Any]) -> None:
+    """
+    Guarantees MC has at least 2 choices and that scoring_data.value is valid.
+    If needed, harvest options from the prompt; if still short, inject safe distractors.
+    """
+    ia = entry.get("interaction_data") or {}
+    choices = ia.get("choices") or []
+    clean_prompt, inline_opts = _split_prompt_and_inline_options(entry.get("item_body") or "")
+    if len(choices) < 2 and inline_opts:
+        existing = { (c.get("text") or "").strip() for c in choices if c.get("text") }
+        for opt in inline_opts:
+            if opt and opt not in existing:
+                choices.append({"id": _uuid(), **_label(opt)})
+        entry["item_body"] = clean_prompt
+
+    while len(choices) < 2:  # inject safe distractors
+        tag = f"Option {len(choices)+1}"
+        choices.append({"id": _uuid(), **_label(tag)})
+
+    ia["choices"] = choices
+    entry["interaction_data"] = ia
+
+    # align scoring_data.value
+    ids = [c["id"] for c in choices]
+    val = ((entry.get("scoring_data") or {}).get("value"))
+    if val not in ids:
+        entry["scoring_data"] = {"value": ids[0]}
+
+def _ensure_min_choices_for_ma(entry: Dict[str, Any]) -> None:
+    """
+    Guarantees MA has at least 2 choices; trims scoring_data.value to valid IDs.
+    """
+    ia = entry.get("interaction_data") or {}
+    choices = ia.get("choices") or []
+    clean_prompt, inline_opts = _split_prompt_and_inline_options(entry.get("item_body") or "")
+    if len(choices) < 2 and inline_opts:
+        existing = { (c.get("text") or "").strip() for c in choices if c.get("text") }
+        for opt in inline_opts:
+            if opt and opt not in existing:
+                choices.append({"id": _uuid(), **_label(opt)})
+        entry["item_body"] = clean_prompt
+
+    while len(choices) < 2:
+        tag = f"Option {len(choices)+1}"
+        choices.append({"id": _uuid(), **_label(tag)})
+
+    ia["choices"] = choices
+    entry["interaction_data"] = ia
+
+    ids = {c["id"] for c in choices}
+    val = ((entry.get("scoring_data") or {}).get("value")) or []
+    val = [v for v in val if v in ids]
+    entry["scoring_data"] = {"value": val}
 
 class NewQuizItemBuilder:
     def build_item(self, q: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,7 +117,7 @@ class NewQuizItemBuilder:
             }
         }
 
-        # ---------- Multiple Choice ----------
+        # MULTIPLE CHOICE
         if t == "multiple_choice":
             choices, correct_id, per_ans_fb = [], None, {}
             for ans in (q.get("answers") or []):
@@ -80,16 +126,11 @@ class NewQuizItemBuilder:
                     continue
                 cid = _uuid()
                 choices.append({"id": cid, **_label(label)})
-                if ans.get("is_correct"):
-                    correct_id = cid
-                if ans.get("feedback_html"):
-                    per_ans_fb[cid] = ans["feedback_html"]
+                if ans.get("is_correct"): correct_id = cid
+                if ans.get("feedback_html"): per_ans_fb[cid] = ans["feedback_html"]
 
             item["entry"]["interaction_type_slug"] = "choice"
-            item["entry"]["interaction_data"] = {
-                "choices": choices,
-                "shuffle_answers": bool(q.get("shuffle", True))
-            }
+            item["entry"]["interaction_data"] = {"choices": choices, "shuffle_answers": bool(q.get("shuffle", True))}
             item["entry"]["properties"] = {
                 "shuffle_rules": {"choices": {"shuffled": bool(q.get("shuffle", True))}},
                 "vary_points_by_answer": False
@@ -98,7 +139,9 @@ class NewQuizItemBuilder:
             item["entry"]["scoring_algorithm"] = "Equivalence"
             item["entry"]["answer_feedback"] = per_ans_fb or None
 
-        # ---------- Multiple Answer ----------
+            _ensure_min_choices_for_mc(item["entry"])  # <— harden
+
+        # MULTIPLE ANSWER
         elif t == "multiple_answer":
             choices, correct_ids = [], []
             for ans in (q.get("answers") or []):
@@ -107,28 +150,24 @@ class NewQuizItemBuilder:
                     continue
                 cid = _uuid()
                 choices.append({"id": cid, **_label(label)})
-                if ans.get("is_correct"):
-                    correct_ids.append(cid)
+                if ans.get("is_correct"): correct_ids.append(cid)
 
             item["entry"]["interaction_type_slug"] = "multi-answer"
-            item["entry"]["interaction_data"] = {
-                "choices": choices,
-                "shuffle_answers": bool(q.get("shuffle", True))
-            }
-            item["entry"]["properties"] = {
-                "shuffle_rules": {"choices": {"shuffled": bool(q.get("shuffle", True))}}
-            }
+            item["entry"]["interaction_data"] = {"choices": choices, "shuffle_answers": bool(q.get("shuffle", True))}
+            item["entry"]["properties"] = {"shuffle_rules": {"choices": {"shuffled": bool(q.get("shuffle", True))}}}
             item["entry"]["scoring_data"] = {"value": correct_ids}
             item["entry"]["scoring_algorithm"] = "PartialScore"
 
-        # ---------- True / False ----------
+            _ensure_min_choices_for_ma(item["entry"])  # <— harden
+
+        # TRUE / FALSE
         elif t == "true_false":
             item["entry"]["interaction_type_slug"] = "true-false"
             item["entry"]["interaction_data"] = {}
             item["entry"]["scoring_data"] = {"value": bool(q.get("correct"))}
             item["entry"]["scoring_algorithm"] = "Equivalence"
 
-        # ---------- Fill-in-Blank (rich) ----------
+        # FILL IN THE BLANK (rich)
         elif t == "fill_in_blank":
             blanks = q.get("blanks") or []
             twb = q.get("text_with_blanks") or q.get("prompt_html") or q.get("prompt") or ""
@@ -136,12 +175,7 @@ class NewQuizItemBuilder:
                 twb = twb + " {{b1}}"
                 answers = [a.get("text") for a in (q.get("answers") or []) if a.get("text")]
                 blanks = [{"id": "b1", "correct": answers}]
-
-            blanks_map = {}
-            for b in blanks:
-                alts = [{"id": _uuid(), **_label(v)} for v in (b.get("correct") or [])]
-                blanks_map[b["id"]] = alts
-
+            blanks_map = {b["id"]: [{"id": _uuid(), **_label(v)} for v in (b.get("correct") or [])] for b in blanks}
             item["entry"]["interaction_type_slug"] = "rich-fill-blank"
             item["entry"]["interaction_data"] = {"text_with_blanks": twb, "blanks": blanks_map}
             item["entry"]["scoring_data"] = {
@@ -149,7 +183,7 @@ class NewQuizItemBuilder:
             }
             item["entry"]["scoring_algorithm"] = "MultipleMethods"
 
-        # ---------- Short Answer ----------
+        # SHORT ANSWER -> single blank
         elif t == "short_answer":
             answers = [a.get("text", "") for a in (q.get("answers") or []) if a.get("text")]
             twb = (q.get("prompt_html") or q.get("prompt") or "") + " {{b1}}"
@@ -159,14 +193,14 @@ class NewQuizItemBuilder:
             item["entry"]["scoring_data"] = {"value": {"blank_to_correct_answer_ids": {"b1": [a["id"] for a in alts]}}}
             item["entry"]["scoring_algorithm"] = "MultipleMethods"
 
-        # ---------- Essay ----------
+        # ESSAY
         elif t == "essay":
             item["entry"]["interaction_type_slug"] = "essay"
             item["entry"]["interaction_data"] = {}
             item["entry"]["scoring_data"] = {"value": None}
             item["entry"]["scoring_algorithm"] = "None"
 
-        # ---------- Numeric ----------
+        # NUMERIC
         elif t == "numeric":
             spec = q.get("numeric") or {}
             exact = spec.get("exact")
@@ -174,26 +208,16 @@ class NewQuizItemBuilder:
             item["entry"]["interaction_type_slug"] = "numeric"
             item["entry"]["interaction_data"] = {}
             if exact is not None and tol > 0:
-                item["entry"]["scoring_data"] = {
-                    "value": [{
-                        "id": _uuid(),
-                        "type": "marginOfError",
-                        "value": str(exact),
-                        "margin": str(tol),
-                        "margin_type": "absolute"
-                    }]
-                }
+                item["entry"]["scoring_data"] = {"value": [{
+                    "id": _uuid(), "type": "marginOfError", "value": str(exact), "margin": str(tol), "margin_type": "absolute"
+                }]}
             else:
-                item["entry"]["scoring_data"] = {
-                    "value": [{
-                        "id": _uuid(),
-                        "type": "exactResponse",
-                        "value": str(exact if exact is not None else "")
-                    }]
-                }
+                item["entry"]["scoring_data"] = {"value": [{
+                    "id": _uuid(), "type": "exactResponse", "value": str(exact if exact is not None else "")
+                }]}
             item["entry"]["scoring_algorithm"] = "Numeric"
 
-        # ---------- Matching ----------
+        # MATCHING
         elif t == "matching":
             right_ids, choices, prompts = {}, [], []
             for pair in (q.get("pairs") or []):
@@ -204,14 +228,13 @@ class NewQuizItemBuilder:
                     right_ids[right] = rcid
                     choices.append({"id": rcid, **_label(right)})
                 prompts.append({"id": _uuid(), **_label(pair["prompt"]), "answer_choice_id": rcid})
-
             item["entry"]["interaction_type_slug"] = "matching"
             item["entry"]["interaction_data"] = {"choices": choices, "prompts": prompts}
             item["entry"]["properties"] = {"shuffle_rules": {"questions": {"shuffled": False}}}
             item["entry"]["scoring_data"] = {"value": {p["id"]: p["answer_choice_id"] for p in prompts}}
             item["entry"]["scoring_algorithm"] = "DeepEquals"
 
-        # ---------- Ordering ----------
+        # ORDERING
         elif t == "ordering":
             items = [{"id": _uuid(), **_label(x)} for x in (q.get("order") or [])]
             item["entry"]["interaction_type_slug"] = "ordering"
@@ -219,7 +242,7 @@ class NewQuizItemBuilder:
             item["entry"]["scoring_data"] = {"value": [c["id"] for c in items]}
             item["entry"]["scoring_algorithm"] = "DeepEquals"
 
-        # ---------- Categorization ----------
+        # CATEGORIZATION
         elif t == "categorization":
             src = q.get("categories", []) or []
             categories, by_name = [], {}
@@ -233,21 +256,20 @@ class NewQuizItemBuilder:
                 for label in (cat.get("items") or []):
                     choice_id = _uuid()
                     choices.append({"id": choice_id, **_label(label), "category_id": cid})
-
             item["entry"]["interaction_type_slug"] = "categorization"
             item["entry"]["interaction_data"] = {"categories": categories, "choices": choices}
             item["entry"]["scoring_data"] = {"value": {c["id"]: c["category_id"] for c in choices}}
             item["entry"]["scoring_algorithm"] = "Categorization"
             item["entry"]["properties"] = {"shuffle_rules": {"questions": {"shuffled": False}}}
 
-        # ---------- File Upload ----------
+        # FILE UPLOAD
         elif t == "file_upload":
             item["entry"]["interaction_type_slug"] = "file-upload"
             item["entry"]["interaction_data"] = {}
             item["entry"]["scoring_data"] = {"value": None}
             item["entry"]["scoring_algorithm"] = "None"
 
-        # ---------- Hot Spot ----------
+        # HOT SPOT (minimal)
         elif t == "hot_spot":
             item["entry"]["interaction_type_slug"] = "hot-spot"
             item["entry"]["interaction_data"] = {
@@ -257,7 +279,7 @@ class NewQuizItemBuilder:
             item["entry"]["scoring_data"] = {"value": [hs.get("id") for hs in q.get("hotspots", [])]}
             item["entry"]["scoring_algorithm"] = "HotSpot"
 
-        # ---------- Formula ----------
+        # FORMULA (shell)
         elif t == "formula":
             item["entry"]["interaction_type_slug"] = "formula"
             item["entry"]["interaction_data"] = {}
@@ -269,58 +291,30 @@ class NewQuizItemBuilder:
 
         return {"item": item}
 
-# ------------------ pre-flight repair for MC / MA ------------------
+# --------------- pre-flight repair right before POST ---------------
 
 def _repair_mc_like(item: Dict[str, Any]) -> None:
     entry = item.get("entry") or {}
     slug = (entry.get("interaction_type_slug") or "").strip()
-    if slug not in ("choice", "multi-answer"):
-        return
-
-    ia = entry.get("interaction_data") or {}
-    choices = ia.get("choices") or []
-    # If fewer than 2 choices, mine more from the prompt paragraphs
-    if len(choices) < 2:
-        clean_prompt, inline_opts = _split_prompt_and_inline_options(entry.get("item_body") or "")
-        existing = { (c.get("text") or "").strip() for c in choices if c.get("text") }
-        for opt in inline_opts:
-            if opt and opt not in existing:
-                choices.append({"id": _uuid(), **_label(opt)})
-        if len(choices) < 2:
-            choices.append({"id": _uuid(), **_label("None of the above")})  # <-- fixed line
-        entry["item_body"] = clean_prompt
-        ia["choices"] = choices
-        entry["interaction_data"] = ia
-
-    # Make sure MC has a valid single 'value'
     if slug == "choice":
-        ids = [c["id"] for c in choices]
-        val = ((entry.get("scoring_data") or {}).get("value"))
-        if val not in ids and ids:
-            entry["scoring_data"] = {"value": ids[0]}
-    else:
-        # For MA — ensure 'value' is a list subset of the current choice IDs
-        ids = {c["id"] for c in choices}
-        val = ((entry.get("scoring_data") or {}).get("value")) or []
-        val = [v for v in val if v in ids]
-        entry["scoring_data"] = {"value": val}
+        _ensure_min_choices_for_mc(entry)
+    elif slug == "multi-answer":
+        _ensure_min_choices_for_ma(entry)
 
-# ---------- Posting (form first, then JSON fallback) ----------
+# ------------------ POST helpers ------------------
 
 def _post_form(url: str, token: str, payload: dict):
     return requests.post(url, headers=H(token), data={"item": json.dumps(payload["item"])}, timeout=60)
 
 def _post_json(url: str, token: str, payload: dict):
-    return requests.post(
-        url, headers={**H(token), "Content-Type": "application/json"},
-        json={"item": payload["item"]}, timeout=60
-    )
+    return requests.post(url, headers={**H(token), "Content-Type": "application/json"},
+                         json={"item": payload["item"]}, timeout=60)
 
 def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
     if position is not None:
         item_payload["item"]["position"] = int(position)
 
-    # PRE-FLIGHT REPAIR (stops Build spinner when parser missed options)
+    # FINAL safety check (prevents Build spinner)
     try:
         _repair_mc_like(item_payload["item"])
     except Exception:
@@ -329,15 +323,15 @@ def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_pay
     url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
 
     delays = [1, 2, 4, 6]
-    for i, d in enumerate([0] + delays):
+    for d in [0] + delays:
         if d: time.sleep(d)
         r = _post_form(url, token, item_payload)
         if r.status_code in (200, 201): return r
-        if 500 <= r.status_code < 600:
+        if 500 <= r.status_code < 600:  # retry server errors
             continue
         r2 = _post_json(url, token, item_payload)
         if r2.status_code in (200, 201): return r2
         if 500 <= r2.status_code < 600:
             continue
-        return r2
+        return r2  # non-retryable 4xx
     return r

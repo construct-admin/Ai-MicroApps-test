@@ -118,8 +118,17 @@ with tab1:
                         for pos, q in enumerate(qs, start=1):
                             try:
                                 payload = builder.build_item(q)
-                                # IMPORTANT: Items API expects top-level {"item": {...}}
-                                resp = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos)
+
+                                # --- DEBUG: show the exact payload we’re about to POST ---
+                                SHOW_ALL_PAYLOADS = False  # set True to dump every item
+                                if SHOW_ALL_PAYLOADS or pos == 1:
+                                    st.write(f"DEBUG • About to POST item #{pos}")
+                                    st.code(json.dumps(payload, indent=2), language="json")
+                                # ----------------------------------------------------------
+
+                                resp = post_new_quiz_item(
+                                    canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos
+                                )
                                 try:
                                     body = resp.json()
                                 except Exception:
@@ -130,6 +139,7 @@ with tab1:
                                     failures.append({"position": pos, "status": resp.status_code, "body": body})
                             except Exception as e:
                                 failures.append({"position": pos, "status": "client-exception", "body": str(e)})
+
 
                         st.success(f"New Quiz created. {success_ct}/{len(qs)} item requests succeeded. (assignment_id={assignment_id})")
 
