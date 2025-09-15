@@ -3,7 +3,15 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List
 
-from canvas_api import add_to_module, create_new_quiz, BASE, H
+from canvas_api import (
+    add_to_module,
+    create_new_quiz,
+    BASE, H,
+    get_new_quiz_items,      # ✅ used below
+    publish_assignment,       # ✅ used below
+    assignment_url,           # ✅ used below
+    update_new_quiz_item      # ✅ used in Repair block
+)
 from new_quiz_items import NewQuizItemBuilder, post_new_quiz_item, SUPPORTED_TYPES
 from quiz_tag_parser import QuizTagParser
 from storyboard import load_storyboard_text
@@ -70,10 +78,11 @@ with tab1:
                         # ------------ create quiz ------------
                         created = create_new_quiz(canvas_domain, course_id, quiz_title, description, canvas_token)
 
+                        # Safe guard if create failed or returned None
                         if not created or not created.get("assignment_id"):
                             st.error("Create New Quiz did not return an assignment_id.")
                             st.caption("Canvas response attempts:")
-                            st.code(json.dumps(created.get("http_debug", {}), indent=2), language="json")
+                            st.code(json.dumps((created or {}).get("http_debug", {}), indent=2), language="json")
                             st.stop()
 
                         assignment_id = created["assignment_id"]
@@ -86,7 +95,9 @@ with tab1:
                         for pos, q in enumerate(qs, start=1):
                             try:
                                 payload = builder.build_item(q)
-                                resp = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos)
+                                resp = post_new_quiz_item(
+                                    canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos
+                                )
                                 try:
                                     body = resp.json()
                                 except Exception:
@@ -99,7 +110,6 @@ with tab1:
                                 failures.append({"position": pos, "status": "client-exception", "body": str(e)})
 
                         # Verify what Canvas thinks is in the quiz
-                        from canvas_api import get_new_quiz_items, publish_assignment, assignment_url
                         st.success(f"New Quiz created. {success_ct}/{len(qs)} item requests succeeded. (assignment_id={assignment_id})")
 
                         status_code, items_data = get_new_quiz_items(canvas_domain, course_id, assignment_id, canvas_token)
@@ -111,6 +121,71 @@ with tab1:
                             st.success("Assignment published.")
                         else:
                             st.warning("Could not publish assignment (you can publish it manually).")
+
+                        st.markdown("---")
+                        if st.button("Repair quiz (re-fetch, re-post missing, nudge items)"):
+                            # a) fetch what Canvas actually has
+                            status_code, items_data = get_new_quiz_items(canvas_domain, course_id, assignment_id, canvas_token)
+                            st.caption(f"Items GET status: {status_code}")
+                            st.code(json.dumps(items_data, indent=2), language="json")
+
+                            # b) figure out which positions we intended to have
+                            intended_positions = set(range(1, len(qs) + 1))
+                            existing_by_pos = (
+                                {int(it.get("position", 0)): it}
+                                if not isinstance(items_data, list)
+                                else {int(it.get("position", 0)): it for it in items_data}
+                            )
+                            missing_positions = [p for p in sorted(intended_positions) if p not in existing_by_pos]
+
+                            # c) re-post any missing items
+                            readd_results = []
+                            builder = NewQuizItemBuilder()
+                            for pos in missing_positions:
+                                try:
+                                    payload = builder.build_item(qs[pos - 1])
+                                    r = post_new_quiz_item(
+                                        canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos
+                                    )
+                                    try:
+                                        body = r.json()
+                                    except Exception:
+                                        body = r.text
+                                    readd_results.append({"pos": pos, "status": r.status_code, "body": body})
+                                except Exception as e:
+                                    readd_results.append({"pos": pos, "status": "client-exception", "body": str(e)})
+                            if readd_results:
+                                st.write("Reposted missing item results:")
+                                st.code(json.dumps(readd_results, indent=2), language="json")
+
+                            # d) "nudge" each existing item with a no-op update to force a refresh
+                            nudge_results = []
+                            if isinstance(items_data, list):
+                                for pos, it in sorted(existing_by_pos.items()):
+                                    item_payload = {
+                                        "item": {
+                                            "id": it["id"],
+                                            "position": it.get("position"),
+                                            "points_possible": it.get("points_possible", 1.0),
+                                            "entry_type": "Item",
+                                            "entry": it["entry"],  # send back exactly what server has
+                                        }
+                                    }
+                                    r = update_new_quiz_item(
+                                        canvas_domain, course_id, assignment_id, it["id"], item_payload, canvas_token
+                                    )
+                                    try:
+                                        body = r.json()
+                                    except Exception:
+                                        body = r.text
+                                    nudge_results.append({"pos": pos, "status": r.status_code, "body": body})
+                                st.write("Nudge results:")
+                                st.code(json.dumps(nudge_results, indent=2), language="json")
+
+                            # e) publish and give a direct link (less likely to hang than the inline Build iframe)
+                            if publish_assignment(canvas_domain, course_id, assignment_id, canvas_token):
+                                st.success("Assignment published.")
+                            st.markdown(f"[Open in Canvas]({assignment_url(canvas_domain, course_id, assignment_id)})")
 
                         # Direct link to open it in Canvas (use this instead of the spinning Build route)
                         st.markdown(f"[Open in Canvas]({assignment_url(canvas_domain, course_id, assignment_id)})")
