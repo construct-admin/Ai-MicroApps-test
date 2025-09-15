@@ -176,20 +176,24 @@ class QuizTagParser:
 
                 # choices for MCQ / MSQ (allow "* ", "- ", plain)
                 if qtype in ["multiple_choice", "multiple_answer"]:
+                # Recognize "* ", "- ", "A) ", "1) ", "a. ", "1. " as option
+                if _re.match(r"^(\* |- |[A-Da-d]\)|\d+\)|[A-Da-d]\.|\\d+\\.)\\s+", l):
                     is_correct = l.startswith("* ")
-                    opt = _strip(l[2:] if is_correct else l.lstrip("- ").strip())
+                    # strip the leading marker
+                    opt = l[2:] if is_correct else _strip(_re.sub(r"^(\- |[A-Da-d]\)|\d+\)|[A-Da-d]\.|\\d+\\.)\\s+", "", l))
                     fb = None
                     if " <feedback>" in opt:
                         opt, fb = opt.split(" <feedback>", 1)
                         opt, fb = _strip(opt), _strip(fb)
-                    if opt:
-                        answers.append({
-                            "text": opt,
-                            "is_correct": is_correct,
-                            "feedback_html": (f"<p>{fb}</p>" if fb else None)
-                        })
+                    answers.append({
+                        "text": opt,
+                        "is_correct": is_correct,
+                        "feedback_html": (f"<p>{fb}</p>" if fb else None)
+                    })
                     continue
-
+                # Not an option → treat as stem
+                prompt_lines.append(l)
+                continue
                 # otherwise it's stem
                 prompt_lines.append(l)
 
