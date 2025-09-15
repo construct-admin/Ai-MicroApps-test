@@ -128,3 +128,20 @@ def add_to_module(domain: str, course_id: str, module_id: str, item_type: str, r
     }
     r = requests.post(url, headers=H(token), data=data, timeout=60)
     return r.status_code in (200, 201)
+
+def publish_assignment(domain: str, course_id: str, assignment_id: int, token: str) -> bool:
+    url = f"{BASE(domain)}/api/v1/courses/{course_id}/assignments/{assignment_id}"
+    r = requests.put(url, headers=H(token), data={"assignment[published]": True}, timeout=60)
+    return r.status_code in (200, 201)
+
+def get_new_quiz_items(domain: str, course_id: str, assignment_id: int, token: str):
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
+    r = requests.get(url, headers=H(token), timeout=60)
+    try:
+        data = r.json()
+    except Exception:
+        data = {"status": r.status_code, "text": r.text}
+    return r.status_code, data
+
+def assignment_url(domain: str, course_id: str, assignment_id: int) -> str:
+    return f"{BASE(domain)}/courses/{course_id}/assignments/{assignment_id}"

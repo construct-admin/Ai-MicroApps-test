@@ -81,39 +81,44 @@ with tab1:
                         # ------------ post items ------------
                         builder = NewQuizItemBuilder()
                         success_ct = 0
-                        failures: List[Dict[str, Any]] = []
+                        failures = []
 
                         for pos, q in enumerate(qs, start=1):
                             try:
                                 payload = builder.build_item(q)
-                                resp = post_new_quiz_item(
-                                    canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos
-                                )
+                                resp = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos)
                                 try:
                                     body = resp.json()
                                 except Exception:
                                     body = resp.text
-
-                                if resp is not None and resp.status_code in (200, 201):
+                                if resp.status_code in (200, 201):
                                     success_ct += 1
                                 else:
-                                    failures.append({"position": pos, "status": getattr(resp, "status_code", None), "body": body})
+                                    failures.append({"position": pos, "status": resp.status_code, "body": body})
                             except Exception as e:
                                 failures.append({"position": pos, "status": "client-exception", "body": str(e)})
 
-                        st.success(f"New Quiz created. {success_ct}/{len(qs)} items added. (assignment_id={assignment_id})")
+                        # Verify what Canvas thinks is in the quiz
+                        from canvas_api import get_new_quiz_items, publish_assignment, assignment_url
+                        st.success(f"New Quiz created. {success_ct}/{len(qs)} item requests succeeded. (assignment_id={assignment_id})")
 
+                        status_code, items_data = get_new_quiz_items(canvas_domain, course_id, assignment_id, canvas_token)
+                        st.caption(f"Items GET status: {status_code}")
+                        st.code(json.dumps(items_data, indent=2), language="json")
+
+                        # Publish so it’s visible in Modules/Assignments immediately
+                        if publish_assignment(canvas_domain, course_id, assignment_id, canvas_token):
+                            st.success("Assignment published.")
+                        else:
+                            st.warning("Could not publish assignment (you can publish it manually).")
+
+                        # Direct link to open it in Canvas (use this instead of the spinning Build route)
+                        st.markdown(f"[Open in Canvas]({assignment_url(canvas_domain, course_id, assignment_id)})")
+
+                        # Show any failures (e.g., 5xx that persisted)
                         if failures:
                             st.warning("Some items failed to add:")
                             st.code(json.dumps(failures, indent=2), language="json")
-
-                        # ------------ optional: add to module ------------
-                        if module_id:
-                            ok = add_to_module(canvas_domain, course_id, module_id, "Assignment", assignment_id, quiz_title, canvas_token)
-                            if ok:
-                                st.success("Added to Module.")
-                            else:
-                                st.warning("Could not add to Module (check module id/permissions).")
 
 with tab2:
     st.subheader("Try a Minimal Example")

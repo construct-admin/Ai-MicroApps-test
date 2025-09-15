@@ -231,17 +231,37 @@ class NewQuizItemBuilder:
         return {"item": base}
 
 
-def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
-    if position is not None:
-        item_payload["item"]["position"] = int(position)
-    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
+    def _try_post_form(url, token, payload):
+        return requests.post(url, headers=H(token), data={"item": json.dumps(payload["item"])}, timeout=60)
 
-    # Attempt 1: form-encoded "item=<json>"
-    r1 = requests.post(url, headers=H(token), data={"item": json.dumps(item_payload["item"])}, timeout=60)
-    if r1.status_code in (200, 201):
-        return r1
+    def _try_post_json(url, token, payload):
+        return requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=payload, timeout=60)
 
-    # Attempt 2: JSON body (some tenants prefer this)
-    r2 = requests.post(url, headers={**H(token), "Content-Type": "application/json"},
-                       json=item_payload, timeout=60)
-    return r2
+    def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
+        if position is not None:
+            item_payload["item"]["position"] = int(position)
+        url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
+
+        delays = [1, 2, 4, 6]  # seconds
+        attempts = len(delays) + 1
+
+        for i in range(attempts):
+            # 1) form-encoded
+            r = _try_post_form(url, token, item_payload)
+            if r.status_code in (200, 201):
+                return r
+            # retry only on 5xx
+            if 500 <= r.status_code < 600:
+                if i < len(delays):
+                    time.sleep(delays[i])
+                    continue
+            # 2) json body as a second try within the same round
+            r2 = _try_post_json(url, token, item_payload)
+            if r2.status_code in (200, 201):
+                return r2
+            if 500 <= r2.status_code < 600 and i < len(delays):
+                time.sleep(delays[i])
+                continue
+            # non-5xx (e.g., 4xx) — return immediately
+            return r2
+        return r  # last response
