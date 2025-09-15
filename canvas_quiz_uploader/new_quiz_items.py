@@ -1,5 +1,5 @@
-
-import uuid, json, requests
+# new_quiz_items.py
+import uuid, json, requests, time
 from typing import Dict, Any, List
 from canvas_api import BASE, H
 
@@ -12,8 +12,11 @@ SUPPORTED_TYPES = [
     "file_upload","hot_spot","formula"
 ]
 
-# new_quiz_items.py — replace ONLY the build_item method with this version
 class NewQuizItemBuilder:
+    """
+    Builds Canvas New Quizzes Items payloads for the supported normalized schema.
+    Each built payload has entry.scoring_data with a required top-level 'value'.
+    """
     def build_item(self, q: Dict[str, Any]) -> Dict[str, Any]:
         base = {
             "position": None,
@@ -26,7 +29,7 @@ class NewQuizItemBuilder:
                 "interaction_type_slug": None,
                 "interaction_data": None,
                 "properties": {},
-                "scoring_data": None,          # <-- always filled with {"value": ...}
+                "scoring_data": None,          # always becomes {"value": ...}
                 "scoring_algorithm": None,
                 "feedback": {k: v for k, v in (q.get("feedback") or {}).items() if v},
                 "answer_feedback": None,
@@ -50,7 +53,7 @@ class NewQuizItemBuilder:
                 "choices": choices,
                 "shuffle_answers": bool(q.get("shuffle", True))
             }
-            base["entry"]["scoring_data"] = {"value": correct_id}  # ✅ value
+            base["entry"]["scoring_data"] = {"value": correct_id}
             base["entry"]["scoring_algorithm"] = "Equivalence"
             base["entry"]["answer_feedback"] = per_ans_fb or None
 
@@ -68,34 +71,29 @@ class NewQuizItemBuilder:
                 "choices": choices,
                 "shuffle_answers": bool(q.get("shuffle", True))
             }
-            base["entry"]["scoring_data"] = {"value": correct_ids}  # ✅ value (not "values")
+            base["entry"]["scoring_data"] = {"value": correct_ids}  # not "values"
             base["entry"]["scoring_algorithm"] = "PartialScore"
 
         # ---------- True / False ----------
         elif t == "true_false":
             base["entry"]["interaction_type_slug"] = "true-false"
             base["entry"]["interaction_data"] = {}
-            base["entry"]["scoring_data"] = {"value": bool(q.get("correct"))}  # ✅ value
+            base["entry"]["scoring_data"] = {"value": bool(q.get("correct"))}
             base["entry"]["scoring_algorithm"] = "Equivalence"
 
         # ---------- Short Answer -> rich-fill-blank (single blank) ----------
         elif t == "short_answer":
             acc = [a.get("text", "") for a in q.get("answers", []) if a.get("text")]
             blank_id = "b1"
-            # choices for this blank
             alts = [{"id": _uuid(), "text": s} for s in acc]
             base["entry"]["interaction_type_slug"] = "rich-fill-blank"
-            # Use a clear one-blank marker; Canvas accepts the {{b1}} token form
             base["entry"]["interaction_data"] = {
                 "text_with_blanks": (q.get("prompt_html") or "") + " {{b1}}",
                 "blanks": {blank_id: alts}
             }
-            # ✅ scoring_data must wrap in "value"
             base["entry"]["scoring_data"] = {
                 "value": {
-                    "blank_to_correct_answer_ids": {
-                        blank_id: [a["id"] for a in alts]
-                    }
+                    "blank_to_correct_answer_ids": {blank_id: [a["id"] for a in alts]}
                 }
             }
             base["entry"]["scoring_algorithm"] = "MultipleMethods"
@@ -104,7 +102,7 @@ class NewQuizItemBuilder:
         elif t == "essay":
             base["entry"]["interaction_type_slug"] = "essay"
             base["entry"]["interaction_data"] = {}
-            base["entry"]["scoring_data"] = {"value": None}  # ✅ value (null)
+            base["entry"]["scoring_data"] = {"value": None}
             base["entry"]["scoring_algorithm"] = "None"
 
         # ---------- Numeric ----------
@@ -115,7 +113,6 @@ class NewQuizItemBuilder:
             base["entry"]["interaction_type_slug"] = "numeric"
             base["entry"]["interaction_data"] = {}
 
-            # ✅ required "value" shape
             if exact is not None and tol > 0:
                 base["entry"]["scoring_data"] = {
                     "value": [{
@@ -150,7 +147,6 @@ class NewQuizItemBuilder:
 
             base["entry"]["interaction_type_slug"] = "matching"
             base["entry"]["interaction_data"] = {"choices": choices, "prompts": prompts}
-            # ✅ "value" is the mapping prompt_id -> choice_id
             base["entry"]["scoring_data"] = {
                 "value": {p["id"]: p["answer_choice_id"] for p in prompts}
             }
@@ -161,7 +157,6 @@ class NewQuizItemBuilder:
             items = [{"id": _uuid(), "text": x} for x in q.get("order", [])]
             base["entry"]["interaction_type_slug"] = "ordering"
             base["entry"]["interaction_data"] = {"choices": items}
-            # ✅ ordered IDs under "value"
             base["entry"]["scoring_data"] = {"value": [c["id"] for c in items]}
             base["entry"]["scoring_algorithm"] = "DeepEquals"
 
@@ -175,7 +170,6 @@ class NewQuizItemBuilder:
                     choices.append({"id": _uuid(), "text": item, "category_id": id_by_name[c["name"]]})
             base["entry"]["interaction_type_slug"] = "categorization"
             base["entry"]["interaction_data"] = {"categories": cats, "choices": choices}
-            # ✅ choice -> category mapping under "value"
             base["entry"]["scoring_data"] = {
                 "value": {c["id"]: c["category_id"] for c in choices}
             }
@@ -185,12 +179,12 @@ class NewQuizItemBuilder:
         elif t == "fill_in_blank":
             blanks = q.get("blanks", [])
             blanks_map = {b["id"]: [{"id": _uuid(), "text": alt} for alt in b.get("correct", [])] for b in blanks}
+
             base["entry"]["interaction_type_slug"] = "rich-fill-blank"
             base["entry"]["interaction_data"] = {
                 "text_with_blanks": q.get("prompt_html") or "",
                 "blanks": blanks_map
             }
-            # ✅ required "value" wrapper
             base["entry"]["scoring_data"] = {
                 "value": {
                     "blank_to_correct_answer_ids": {
@@ -200,11 +194,11 @@ class NewQuizItemBuilder:
             }
             base["entry"]["scoring_algorithm"] = "MultipleMethods"
 
-        # ---------- File Upload (manual) ----------
+        # ---------- File Upload ----------
         elif t == "file_upload":
             base["entry"]["interaction_type_slug"] = "file-upload"
             base["entry"]["interaction_data"] = {}
-            base["entry"]["scoring_data"] = {"value": None}  # ✅ value
+            base["entry"]["scoring_data"] = {"value": None}
             base["entry"]["scoring_algorithm"] = "None"
 
         # ---------- Hot Spot ----------
@@ -214,11 +208,10 @@ class NewQuizItemBuilder:
                 "image": q.get("hotspot_image") or {"url": q.get("image_url")},
                 "hotspots": q.get("hotspots", [])
             }
-            # Canvas varies here; keep a minimal "value"
             base["entry"]["scoring_data"] = {"value": [hs.get("id") for hs in q.get("hotspots", [])]}
             base["entry"]["scoring_algorithm"] = "HotSpot"
 
-        # ---------- Formula (treated like Numeric scaffolding) ----------
+        # ---------- Formula ----------
         elif t == "formula":
             base["entry"]["interaction_type_slug"] = "formula"
             base["entry"]["interaction_data"] = {}
@@ -230,38 +223,40 @@ class NewQuizItemBuilder:
 
         return {"item": base}
 
+# ---------- resilient poster with 5xx retries ----------
 
-    def _try_post_form(url, token, payload):
-        return requests.post(url, headers=H(token), data={"item": json.dumps(payload["item"])}, timeout=60)
+def _try_post_form(url, token, payload):
+    return requests.post(url, headers=H(token), data={"item": json.dumps(payload["item"])}, timeout=60)
 
-    def _try_post_json(url, token, payload):
-        return requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=payload, timeout=60)
+def _try_post_json(url, token, payload):
+    return requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=payload, timeout=60)
 
-    def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
-        if position is not None:
-            item_payload["item"]["position"] = int(position)
-        url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
+def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
+    if position is not None:
+        item_payload["item"]["position"] = int(position)
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
 
-        delays = [1, 2, 4, 6]  # seconds
-        attempts = len(delays) + 1
+    delays = [1, 2, 4, 6]  # seconds
+    attempts = len(delays) + 1
 
-        for i in range(attempts):
-            # 1) form-encoded
-            r = _try_post_form(url, token, item_payload)
-            if r.status_code in (200, 201):
-                return r
-            # retry only on 5xx
-            if 500 <= r.status_code < 600:
-                if i < len(delays):
-                    time.sleep(delays[i])
-                    continue
-            # 2) json body as a second try within the same round
+    for i in range(attempts):
+        # 1) form-encoded
+        r = _try_post_form(url, token, item_payload)
+        if r.status_code in (200, 201):
+            return r
+        if 500 <= r.status_code < 600 and i < len(delays):
+            time.sleep(delays[i])
+            # try again in next loop
+        else:
+            # 2) json body within same round
             r2 = _try_post_json(url, token, item_payload)
             if r2.status_code in (200, 201):
                 return r2
             if 500 <= r2.status_code < 600 and i < len(delays):
                 time.sleep(delays[i])
                 continue
-            # non-5xx (e.g., 4xx) — return immediately
+            # non-5xx → return immediately
             return r2
-        return r  # last response
+
+    # if we exhausted retries on form-only path
+    return r
