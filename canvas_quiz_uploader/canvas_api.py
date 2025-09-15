@@ -12,8 +12,9 @@ def BASE(domain: str) -> str:
     return f"https://{domain}" if not domain.startswith("http") else domain
 
 def H(token: str) -> dict:
-    """Auth header."""
-    return {"Authorization": f"Bearer {token}"}
+    """Sanitize and return auth header."""
+    t = (token or "").strip()
+    return {"Authorization": f"Bearer {t}"}
 
 def safe_body(r: requests.Response) -> Any:
     """Return JSON body if possible, else text, else placeholder."""
@@ -26,26 +27,14 @@ def safe_body(r: requests.Response) -> Any:
             return "<unreadable>"
 
 # -------------------------
-# Feature flag (optional)
+# Token sanity check
 # -------------------------
 
-def is_new_quizzes_enabled(domain: str, course_id: str, token: str) -> Optional[bool]:
-    """
-    Returns True if a known New Quizzes feature flag is enabled, False if explicitly disabled,
-    or None if we couldn't determine.
-    """
-    url = f"{BASE(domain)}/api/v1/courses/{course_id}/features/enabled"
-    r = requests.get(url, headers=H(token), timeout=60)
-    if r.status_code != 200:
-        return None
-    try:
-        flags = r.json()
-    except Exception:
-        return None
-    if not isinstance(flags, list):
-        return None
-    known = {"quizzes_next", "quizzes.next", "new_quizzes"}
-    return any(f in flags for f in known)
+def whoami(domain: str, token: str) -> Tuple[int, Any]:
+    """GET /users/self to validate the token and show the user it resolves to."""
+    url = f"{BASE(domain)}/api/v1/users/self"
+    r = requests.get(url, headers=H(token), timeout=30)
+    return r.status_code, safe_body(r)
 
 # -------------------------
 # Internal helpers
@@ -94,7 +83,6 @@ def _find_assignment_id_for_new_quiz(domain: str, course_id: str, title: str, to
     if not isinstance(items, list):
         return None
 
-    # Prefer External Tool assignments that look like New Quizzes LTI
     candidates = []
     for a in items:
         if "external_tool" in (a.get("submission_types") or []):
@@ -107,7 +95,6 @@ def _find_assignment_id_for_new_quiz(domain: str, course_id: str, title: str, to
         candidates.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
         return candidates[0].get("id")
 
-    # Otherwise, exact title match (newest first)
     same_title = [a for a in items if (a.get("name") or "") == title]
     if same_title:
         same_title.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
@@ -132,7 +119,7 @@ def create_new_quiz(domain: str, course_id: str, title: str, description: str, t
     attempts = []
     url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes"
 
-    # --- 1) JSON attempt — IMPORTANT: wrap under top-level "quiz" ---
+    # 1) JSON attempt — must be wrapped in top-level "quiz"
     json_payload = {"quiz": {"title": title, "instructions": description or "", "points_possible": 0}}
     r1 = requests.post(url, headers={**H(token), "Content-Type": "application/json"}, json=json_payload, timeout=60)
     attempts.append({"where": "json", "status": r1.status_code, "body": safe_body(r1)})
@@ -141,16 +128,14 @@ def create_new_quiz(domain: str, course_id: str, title: str, description: str, t
         data = r1.json()
         aid = _extract_assignment_id(data)
         if not aid:
-            # If the create response lacks assignment_id, fetch quiz details by id
             quiz_id = (data.get("quiz") or {}).get("id") or data.get("id")
             if quiz_id:
                 aid = _resolve_assignment_id_from_quiz_id(domain, course_id, str(quiz_id), token)
         if not aid:
-            # Final fallback: search Assignments by title
             aid = _find_assignment_id_for_new_quiz(domain, course_id, title, token)
         return {"assignment_id": aid, "raw": data, "http_debug": {"attempts": attempts}}
 
-    # --- 2) FORM fallback (some tenants accept only form fields) ---
+    # 2) FORM fallback
     form = {"quiz[title]": title, "quiz[instructions]": description or "", "quiz[points_possible]": 0}
     r2 = requests.post(url, headers=H(token), data=form, timeout=60)
     attempts.append({"where": "form", "status": r2.status_code, "body": safe_body(r2)})
@@ -166,7 +151,7 @@ def create_new_quiz(domain: str, course_id: str, title: str, description: str, t
             aid = _find_assignment_id_for_new_quiz(domain, course_id, title, token)
         return {"assignment_id": aid, "raw": data, "http_debug": {"attempts": attempts}}
 
-    # --- 3) Hard failure ---
+    # 3) Hard failure
     return {"assignment_id": None, "raw": None, "http_debug": {"attempts": attempts}}
 
 # -------------------------
@@ -191,8 +176,13 @@ def update_new_quiz_item(domain: str, course_id: str, assignment_id: int, item_i
     r = requests.put(url, headers=H(token), data={"item": json.dumps(item_payload["item"])}, timeout=60)
     return r
 
+def delete_new_quiz_item(domain: str, course_id: str, assignment_id: int, item_id: str, token: str):
+    """DELETE one New Quiz item (useful when a partial/bad item makes Build spin)."""
+    url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items/{item_id}"
+    return requests.delete(url, headers=H(token), timeout=60)
+
 # -------------------------
-# Assignments API helpers (publish, link)
+# Assignments API helpers (publish, link, modules)
 # -------------------------
 
 def publish_assignment(domain: str, course_id: str, assignment_id: int, token: str) -> bool:

@@ -3,9 +3,10 @@ import streamlit as st
 import json, time
 from typing import Dict, Any, List
 
+# Import exactly what this app needs from our canvas_api
 from canvas_api import (
-    whoami, add_to_module, create_new_quiz, get_new_quiz_items, publish_assignment,
-    assignment_url, update_new_quiz_item, delete_new_quiz_item
+    whoami, add_to_module, create_new_quiz, get_new_quiz_items,
+    publish_assignment, assignment_url, update_new_quiz_item, delete_new_quiz_item
 )
 from new_quiz_items import NewQuizItemBuilder, post_new_quiz_item, SUPPORTED_TYPES
 from quiz_tag_parser import QuizTagParser
@@ -38,22 +39,6 @@ def _ensure_items(canvas_domain, course_id, assignment_id, expected_count, token
         last = (status, data)
         time.sleep(poll_secs)
     return False, last
-
-def _repost_missing(canvas_domain, course_id, assignment_id, qs, have_items, token):
-    existing_by_pos = {int(it.get("position", 0)): it for it in have_items} if isinstance(have_items, list) else {}
-    intended_positions = set(range(1, len(qs) + 1))
-    missing_positions = [p for p in sorted(intended_positions) if p not in existing_by_pos]
-    builder = NewQuizItemBuilder()
-    results = []
-    for pos in missing_positions:
-        payload = builder.build_item(qs[pos - 1])
-        r = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, token, position=pos)
-        try:
-            body = r.json()
-        except Exception:
-            body = r.text
-        results.append({"pos": pos, "status": getattr(r, "status_code", None), "body": body})
-    return results
 
 def _is_bad_item(it: dict) -> bool:
     e = it.get("entry") or {}
@@ -133,6 +118,7 @@ with tab1:
                         for pos, q in enumerate(qs, start=1):
                             try:
                                 payload = builder.build_item(q)
+                                # IMPORTANT: Items API expects top-level {"item": {...}}
                                 resp = post_new_quiz_item(canvas_domain, course_id, assignment_id, payload, canvas_token, position=pos)
                                 try:
                                     body = resp.json()
@@ -235,45 +221,6 @@ What is 2 + 2?
 <question><true_false>
 The sky is blue.
 correct: True
-</question>
-
-<question><short_answer>
-Name a primary color.
-answers:
-Red
-Blue
-Yellow
-</question>
-
-<question><numeric>
-What is the speed (m/s)?
-exact: 12.5
-tolerance: 0.5
-</question>
-
-<question><matching>
-Match the chemical to its common name.
-pairs:
-H2O => Water
-NaCl => Salt
-</question>
-
-<question><ordering>
-Order the stages:
-order:
-First
-Second
-Third
-</question>
-
-<question><categorization>
-Sort animals:
-category Mammals:
-Dog
-Cat
-category Birds:
-Eagle
-Sparrow
 </question>
 
 <question><fill_in_blank>
