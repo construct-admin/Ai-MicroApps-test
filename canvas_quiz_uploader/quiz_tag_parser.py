@@ -1,4 +1,4 @@
-
+# quiz_tag_parser.py  — accepts </quiz_end> OR </quiz>, and is whitespace/case tolerant
 import re
 from typing import List, Dict, Any
 
@@ -7,23 +7,34 @@ def _strip(s: str) -> str:
 
 class QuizTagParser:
     """
-    Parses concise quiz tags inside <quiz_start>...</quiz_end> in a <canvas_page>.
+    Parses concise quiz tags inside <quiz_start>...</quiz_end> (or </quiz>) in a <canvas_page>.
     Supported types:
       multiple_choice, multiple_answer, true_false, short_answer, essay, numeric,
       matching, ordering, categorization, fill_in_blank (rich)
     Output normalized schema per question (see parse()).
     """
     def parse(self, raw_block: str) -> Dict[str, Any]:
-        m = re.search(r"<quiz_start>([\\s\\S]+?)</quiz_end>", raw_block, re.IGNORECASE)
+        # Accept </quiz_end> OR </quiz>, with optional whitespace
+        m = re.search(
+            r"<quiz_start\b[^>]*>\s*([\s\S]+?)\s*</(?:quiz_end|quiz)\s*>",
+            raw_block,
+            re.IGNORECASE
+        )
         if not m:
             return {"questions": []}
         txt = m.group(1)
-        q_blocks = re.findall(r"<question>([\\s\\S]+?)</question>", txt, re.IGNORECASE)
+
+        # Extract <question>...</question> blocks (tolerant of attrs/whitespace/case)
+        q_blocks = re.findall(
+            r"<question\b[^>]*>\s*([\s\S]+?)\s*</question\s*>",
+            txt,
+            re.IGNORECASE
+        )
         questions: List[Dict[str, Any]] = []
 
         for qidx, qb in enumerate(q_blocks, start=1):
             lines = [ln.rstrip() for ln in qb.strip().splitlines() if _strip(ln)]
-            joined = "\\n".join(lines)
+            joined = "\n".join(lines)
 
             # detect type
             if re.search(r"<multiple_answers>", joined, re.IGNORECASE):
@@ -54,14 +65,15 @@ class QuizTagParser:
             elif re.search(r"<shuffle>", joined, re.IGNORECASE):
                 shuffle = True
 
-            # state & accumulators
+            # accumulators
             prompt_lines: List[str] = []
             answers: List[Dict[str, Any]] = []
             q_fb = {"correct": None, "incorrect": None, "neutral": None}
             tf_correct = None
             numeric_spec = {"exact": None, "tolerance": 0.0}
             short_answers: List[str] = []
-            blanks_map: Dict[str, List[str]] = {}
+            blanks_map: Dict[str, List[str]] = []
+            blanks_map = {}
             matching_pairs: List[Dict[str, str]] = []
             ordering_items: List[str] = []
             categories: List[Dict[str, Any]] = []
@@ -72,12 +84,12 @@ class QuizTagParser:
 
             def is_type_flag(s: str) -> bool:
                 return bool(re.match(
-                    r"</?(multiple_choice|multiple_answers|true_false|short_answer|essay|numeric|matching|ordering|categorization|fill_in_blank)>",
+                    r"</?\s*(multiple_choice|multiple_answers|true_false|short_answer|essay|numeric|matching|ordering|categorization|fill_in_blank)\s*>",
                     s, re.IGNORECASE
                 ))
 
             def is_shuffle_flag(s: str) -> bool:
-                return bool(re.match(r"</?(shuffle|no_shuffle)>", s, re.IGNORECASE))
+                return bool(re.match(r"</?\s*(shuffle|no_shuffle)\s*>", s, re.IGNORECASE))
 
             for ln in lines:
                 l = ln.strip()
@@ -114,7 +126,7 @@ class QuizTagParser:
 
                 if qtype == "fill_in_blank":
                     if lower.startswith("blank "):
-                        m2 = re.match(r"blank\\s+([A-Za-z0-9_]+)\\s*:\\s*$", l, re.IGNORECASE)
+                        m2 = re.match(r"blank\s+([A-Za-z0-9_]+)\s*:\s*$", l, re.IGNORECASE)
                         if m2:
                             current_blank = m2.group(1)
                             blanks_map.setdefault(current_blank, [])
@@ -143,7 +155,7 @@ class QuizTagParser:
 
                 if qtype == "categorization":
                     if lower.startswith("category "):
-                        m3 = re.match(r"category\\s+(.+?):\\s*$", l, re.IGNORECASE)
+                        m3 = re.match(r"category\s+(.+?):\s*$", l, re.IGNORECASE)
                         if m3:
                             current_category = m3.group(1).strip()
                             categories.append({"name": current_category, "items": []})
@@ -153,7 +165,7 @@ class QuizTagParser:
                             categories[-1]["items"].append(_strip(l.lstrip("-* "))); continue
                         state = "stem"
 
-                # choices for MCQ / MSQ (optionally with per-answer feedback)
+                # options for MCQ / MSQ
                 if qtype in ["multiple_choice", "multiple_answer"]:
                     is_correct = l.startswith("* ")
                     opt = _strip(l[2:] if is_correct else l)
