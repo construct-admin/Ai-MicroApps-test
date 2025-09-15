@@ -31,7 +31,7 @@ def _extract_paragraph_texts(html: str) -> List[str]:
 def _split_prompt_and_inline_options(prompt_html: str) -> Tuple[str, List[str]]:
     """
     First <p> = question. Remaining <p> blocks are potential options.
-    We also trim inline feedback like '3  Off by one' -> '3'.
+    Trim inline feedback like '3  Off by one' -> '3'.
     """
     paras = _extract_paragraph_texts(prompt_html)
     if not paras:
@@ -74,7 +74,7 @@ class NewQuizItemBuilder:
         # ---------- Multiple Choice ----------
         if t == "multiple_choice":
             choices, correct_id, per_ans_fb = [], None, {}
-            for ans in q.get("answers", []) or []:
+            for ans in (q.get("answers") or []):
                 label = (ans.get("text") or "").strip()
                 if not label:
                     continue
@@ -101,7 +101,7 @@ class NewQuizItemBuilder:
         # ---------- Multiple Answer ----------
         elif t == "multiple_answer":
             choices, correct_ids = [], []
-            for ans in q.get("answers", []) or []:
+            for ans in (q.get("answers") or []):
                 label = (ans.get("text") or "").strip()
                 if not label:
                     continue
@@ -151,7 +151,7 @@ class NewQuizItemBuilder:
 
         # ---------- Short Answer ----------
         elif t == "short_answer":
-            answers = [a.get("text", "") for a in q.get("answers", []) if a.get("text")]
+            answers = [a.get("text", "") for a in (q.get("answers") or []) if a.get("text")]
             twb = (q.get("prompt_html") or q.get("prompt") or "") + " {{b1}}"
             alts = [{"id": _uuid(), **_label(s)} for s in answers]
             item["entry"]["interaction_type_slug"] = "rich-fill-blank"
@@ -196,7 +196,7 @@ class NewQuizItemBuilder:
         # ---------- Matching ----------
         elif t == "matching":
             right_ids, choices, prompts = {}, [], []
-            for pair in q.get("pairs", []) or []:
+            for pair in (q.get("pairs") or []):
                 right = pair["match"]
                 rcid = right_ids.get(right)
                 if not rcid:
@@ -213,7 +213,7 @@ class NewQuizItemBuilder:
 
         # ---------- Ordering ----------
         elif t == "ordering":
-            items = [{"id": _uuid(), **_label(x)} for x in q.get("order", []) or []]
+            items = [{"id": _uuid(), **_label(x)} for x in (q.get("order") or [])]
             item["entry"]["interaction_type_slug"] = "ordering"
             item["entry"]["interaction_data"] = {"choices": items}
             item["entry"]["scoring_data"] = {"value": [c["id"] for c in items]}
@@ -230,7 +230,7 @@ class NewQuizItemBuilder:
             choices = []
             for cat in src:
                 cid = by_name[cat["name"]]
-                for label in cat.get("items", []) or []:
+                for label in (cat.get("items") or []):
                     choice_id = _uuid()
                     choices.append({"id": choice_id, **_label(label), "category_id": cid})
 
@@ -287,7 +287,7 @@ def _repair_mc_like(item: Dict[str, Any]) -> None:
             if opt and opt not in existing:
                 choices.append({"id": _uuid(), **_label(opt)})
         if len(choices) < 2:
-            choices.append({"id": _uuid(), **_label("None of the above")}}
+            choices.append({"id": _uuid(), **_label("None of the above")})  # <-- fixed line
         entry["item_body"] = clean_prompt
         ia["choices"] = choices
         entry["interaction_data"] = ia
@@ -317,7 +317,6 @@ def _post_json(url: str, token: str, payload: dict):
     )
 
 def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_payload: dict, token: str, position=None):
-    # enforce a valid position for Canvas ordering
     if position is not None:
         item_payload["item"]["position"] = int(position)
 
@@ -325,7 +324,7 @@ def post_new_quiz_item(domain: str, course_id: str, assignment_id: str, item_pay
     try:
         _repair_mc_like(item_payload["item"])
     except Exception:
-        pass  # never fail client-side; server will still validate
+        pass
 
     url = f"{BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
 
