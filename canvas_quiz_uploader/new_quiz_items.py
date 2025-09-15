@@ -186,47 +186,48 @@ class NewQuizItemBuilder:
             base["entry"]["scoring_data"] = {"value": [c["id"] for c in items]}
             base["entry"]["scoring_algorithm"] = "DeepEquals"
 
-        # ---------- Categorization ----------
+        # ---------- Categorization (FIX: arrays + itemBody on all labels) ----------
         elif t == "categorization":
-            # Canvas UI for Categorization reads itemBody on BOTH categories and items.
-            # Build categories as an object map, distractors as an object map, and include category_order.
-            cat_map: Dict[str, Dict[str, Any]] = {}
-            cat_order: List[str] = []
-            scoring_value: List[Dict[str, Any]] = []
-            distractors: Dict[str, Dict[str, Any]] = {}
+            def _triplet(s: str):
+                return {"text": s, "item_body": s, "itemBody": s}
 
-            # Build categories and their items
-            for cat in q.get("categories", []):
+            # 1) categories as an ARRAY
+            categories_src = q.get("categories", []) or []
+            categories = []
+            cat_id_by_name = {}
+            for cat in categories_src:
                 cid = _uuid()
-                cat_map[cid] = {"id": cid, **_label_triplet(cat["name"])}
-                cat_order.append(cid)
+                cat_id_by_name[cat["name"]] = cid
+                categories.append({"id": cid, **_triplet(cat["name"])})
 
-                correct_ids_for_cat: List[str] = []
-                for text in cat.get("items", []):
-                    aid = _uuid()
-                    distractors[aid] = {"id": aid, **_label_triplet(text)}
-                    correct_ids_for_cat.append(aid)
+            # 2) choices as an ARRAY (draggable items)
+            choices = []
+            for cat in categories_src:
+                cid = cat_id_by_name[cat["name"]]
+                for label in cat.get("items", []) or []:
+                    choice_id = _uuid()
+                    choices.append({
+                        "id": choice_id,
+                        **_triplet(label),
+                        "category_id": cid,   # still include for server-side clarity
+                    })
 
-                scoring_value.append({
-                    "id": cid,
-                    "scoring_data": {"value": correct_ids_for_cat},
-                    "scoring_algorithm": "AllOrNothing",
-                })
-
-            # Add any global distractors
-            for extra in q.get("distractors", []):
-                aid = _uuid()
-                distractors[aid] = {"id": aid, **_label_triplet(extra)}
-
+            # 3) interaction_data the UI expects
             base["entry"]["interaction_type_slug"] = "categorization"
             base["entry"]["interaction_data"] = {
-                "categories": cat_map,         # {id: {id, item_body/itemBody}}
-                "distractors": distractors,    # {id: {id, item_body/itemBody}}
-                "category_order": cat_order
+                "categories": categories,   # <-- ARRAY, each with itemBody
+                "choices": choices,         # <-- ARRAY, each with itemBody
             }
-            base["entry"]["properties"] = {"shuffle_rules": {"questions": {"shuffled": False}}}
-            base["entry"]["scoring_data"] = {"value": scoring_value, "score_method": "all_or_nothing"}
+            # 4) scoring_data value: choice_id -> category_id
+            base["entry"]["scoring_data"] = {
+                "value": {c["id"]: c["category_id"] for c in choices}
+            }
             base["entry"]["scoring_algorithm"] = "Categorization"
+            # optional UI niceties
+            base["entry"]["properties"] = {
+                "shuffle_rules": {"questions": {"shuffled": False}}
+            }
+
 
         # ---------- Fill-in-Blank (rich) ----------
         elif t == "fill_in_blank":
