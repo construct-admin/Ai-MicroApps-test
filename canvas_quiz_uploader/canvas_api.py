@@ -1,6 +1,6 @@
 # canvas_api.py
 from typing import Optional, Dict, Any
-import requests
+import requests, json
 
 def BASE(domain: str) -> str:
     return f"https://{domain}" if not domain.startswith("http") else domain
@@ -27,7 +27,13 @@ def _find_assignment_id_for_new_quiz(domain: str, course_id: str, title: str, to
     r = requests.get(url, headers=H(token), params=params, timeout=60)
     if r.status_code != 200:
         return None
-    items = r.json() if isinstance(r.json(), list) else []
+    try:
+        items = r.json()
+    except Exception:
+        items = []
+    if not isinstance(items, list):
+        items = []
+
     # Prefer External Tool assignments whose launch URL looks like New Quizzes
     candidates = []
     for a in items:
@@ -40,6 +46,7 @@ def _find_assignment_id_for_new_quiz(domain: str, course_id: str, title: str, to
         # newest first
         candidates.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
         return candidates[0].get("id")
+
     # else: exact title match, newest first
     same_title = [a for a in items if (a.get("name") or "") == title]
     if same_title:
@@ -53,7 +60,12 @@ def is_new_quizzes_enabled(domain: str, course_id: str, token: str) -> Optional[
     r = requests.get(url, headers=H(token), timeout=60)
     if r.status_code != 200:
         return None  # unknown
-    flags = r.json() if isinstance(r.json(), list) else []
+    try:
+        flags = r.json()
+    except Exception:
+        return None
+    if not isinstance(flags, list):
+        return None
     known = {"quizzes_next", "quizzes.next", "new_quizzes"}
     return any(f in flags for f in known)
 
@@ -65,7 +77,7 @@ def create_new_quiz(domain: str, course_id: str, title: str, description: str, t
       {
         "assignment_id": <int or None>,
         "raw": <create response or error body>,
-        "http_debug": {"attempts":[...]}   # so you can see status/body of each attempt
+        "http_debug": {"attempts":[...]}
       }
     Never raises; the caller can decide what to do if assignment_id is None.
     """
