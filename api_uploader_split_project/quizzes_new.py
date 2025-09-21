@@ -6,11 +6,14 @@
 import uuid
 import requests
 
-def _BASE(domain):
+
+def _BASE(domain: str) -> str:
     return f"https://{domain}".rstrip("/")
 
-def _H(token):
+
+def _H(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Quiz shell
@@ -25,7 +28,7 @@ def add_new_quiz(domain, course_id, title, description_html, token, points_possi
         "quiz": {
             "title": title,
             "points_possible": max(1, int(points_possible or 1)),
-            "instructions": description_html or ""
+            "instructions": description_html or "",
         }
     }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
@@ -39,15 +42,20 @@ def add_new_quiz(domain, course_id, title, description_html, token, points_possi
         return aid, None, r.status_code, (data or r.text)
     return None, (data or r.text), r.status_code, (data or r.text)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Choice (MCQ/MA/TF) — supports per-answer feedback + question-level feedback
 # ─────────────────────────────────────────────────────────────────────────────
 def _mc_scoring_for(answers):
-    """Single-correct -> Equivalence; Multi-correct -> Set."""
+    """
+    Single-correct -> Equivalence
+    Multi-correct  -> SetEquivalence  (array of choice ids)
+    """
     correct = [a["_choice_id"] for a in answers if a.get("is_correct")]
     if len(correct) <= 1:
         return "Equivalence", (correct[0] if correct else None)
-    return "Set", correct
+    return "SetEquivalence", correct
+
 
 def add_choice_item(domain, course_id, assignment_id, q, token, position=1):
     """
@@ -65,11 +73,13 @@ def add_choice_item(domain, course_id, assignment_id, q, token, position=1):
     for idx, a in enumerate(answers, start=1):
         cid = a.get("_choice_id") or str(uuid.uuid4())
         a["_choice_id"] = cid
-        choices.append({
-            "id": cid,
-            "position": idx,
-            "itemBody": f"<p>{a.get('text','')}</p>"
-        })
+        choices.append(
+            {
+                "id": cid,
+                "position": idx,
+                "itemBody": f"<p>{a.get('text','')}</p>",
+            }
+        )
         if a.get("feedback"):
             answer_feedback[cid] = a["feedback"]
 
@@ -82,11 +92,13 @@ def add_choice_item(domain, course_id, assignment_id, q, token, position=1):
         "calculator_type": "none",
         "interaction_data": {"choices": choices},
         "properties": {
-            "shuffleRules": {"choices": {"toLock": [], "shuffled": bool(q.get("shuffle", False))}},
-            "varyPointsByAnswer": False
+            "shuffleRules": {
+                "choices": {"toLock": [], "shuffled": bool(q.get("shuffle", False))}
+            },
+            "varyPointsByAnswer": False,
         },
         "scoring_algorithm": scoring_algorithm,
-        "scoring_data": {"value": scoring_value}
+        "scoring_data": {"value": scoring_value},
     }
 
     # Question-level feedback
@@ -104,7 +116,7 @@ def add_choice_item(domain, course_id, assignment_id, q, token, position=1):
             "entry_type": "Item",
             "points_possible": q.get("points_possible", 1),
             "position": position,
-            "entry": entry
+            "entry": entry,
         }
     }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
@@ -115,13 +127,14 @@ def add_choice_item(domain, course_id, assignment_id, q, token, position=1):
     except Exception:
         return False, r.text
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Short Answer — list of acceptable strings (exact match)
+# Short Answer — list of acceptable strings (exact/ci match)
 # ─────────────────────────────────────────────────────────────────────────────
 def add_short_answer_item(domain, course_id, assignment_id, q, token, position=1):
     """
     Supports: short_answer_question
-    Acceptable answers come from q['answers'] = [{'text': '...'}, ...]
+    Acceptable answers come from q['answers'] = [{'text': '...' }, ...]
     """
     url = f"{_BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
 
@@ -131,14 +144,12 @@ def add_short_answer_item(domain, course_id, assignment_id, q, token, position=1
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
         "calculator_type": "none",
-        "interaction_data": {
-            "caseSensitive": False
-        },
-        # Exact/Equivalence-style for SA
+        "interaction_data": {"caseSensitive": False},
+        # Required for SA-type questions
+        "user_response_type": "string",
+        # Use Equivalence with an array of acceptable strings
         "scoring_algorithm": "Equivalence",
-        "scoring_data": {
-            "values": acceptable  # list of strings
-        }
+        "scoring_data": {"value": acceptable},
     }
 
     fb = (q.get("feedback") or {})
@@ -146,8 +157,14 @@ def add_short_answer_item(domain, course_id, assignment_id, q, token, position=1
     if qlevel:
         entry["feedback"] = qlevel
 
-    payload = {"item": {"entry_type": "Item", "points_possible": q.get("points_possible", 1),
-                        "position": position, "entry": entry}}
+    payload = {
+        "item": {
+            "entry_type": "Item",
+            "points_possible": q.get("points_possible", 1),
+            "position": position,
+            "entry": entry,
+        }
+    }
 
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
     if r.status_code in (200, 201):
@@ -156,6 +173,7 @@ def add_short_answer_item(domain, course_id, assignment_id, q, token, position=1
         return False, r.json()
     except Exception:
         return False, r.text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Essay — instructor graded
@@ -170,7 +188,11 @@ def add_essay_item(domain, course_id, assignment_id, q, token, position=1):
         "interaction_type_slug": "essay",
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
-        "calculator_type": "none"
+        "calculator_type": "none",
+        # Required fields for essay
+        "user_response_type": "text",
+        "scoring_algorithm": "Manual",
+        "scoring_data": {"value": []},
     }
 
     fb = (q.get("feedback") or {})
@@ -178,10 +200,14 @@ def add_essay_item(domain, course_id, assignment_id, q, token, position=1):
     if qlevel:
         entry["feedback"] = qlevel
 
-    payload = {"item": {"entry_type": "Item",
-                        "points_possible": q.get("points_possible", 1),
-                        "position": position,
-                        "entry": entry}}
+    payload = {
+        "item": {
+            "entry_type": "Item",
+            "points_possible": q.get("points_possible", 1),
+            "position": position,
+            "entry": entry,
+        }
+    }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
     if r.status_code in (200, 201):
         return True, None
@@ -189,6 +215,7 @@ def add_essay_item(domain, course_id, assignment_id, q, token, position=1):
         return False, r.json()
     except Exception:
         return False, r.text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fill in multiple blanks — {{blank_id}} in item_body + mapping of answers
@@ -201,24 +228,24 @@ def add_fimb_item(domain, course_id, assignment_id, q, token, position=1):
     """
     url = f"{_BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
 
-    blanks = {}
+    blanks_map = {}
     for a in (q.get("answers") or []):
         b = a.get("blank_id")
         t = a.get("text")
         if b and t:
-            blanks.setdefault(b, []).append(t)
+            blanks_map.setdefault(b, []).append(t)
 
     entry = {
         "interaction_type_slug": "fill_in_multiple_blanks",
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
         "calculator_type": "none",
+        # Required for FIMB
+        "user_response_type": "string",
         # Each blank_id maps to acceptable strings
         "scoring_algorithm": "Equivalence",
-        "scoring_data": {"values": blanks},
-        "interaction_data": {
-            "blanks": [{"id": k} for k in blanks.keys()]
-        }
+        "scoring_data": {"value": blanks_map},
+        "interaction_data": {"blanks": [{"id": k} for k in blanks_map.keys()]},
     }
 
     fb = (q.get("feedback") or {})
@@ -226,10 +253,14 @@ def add_fimb_item(domain, course_id, assignment_id, q, token, position=1):
     if qlevel:
         entry["feedback"] = qlevel
 
-    payload = {"item": {"entry_type": "Item",
-                        "points_possible": q.get("points_possible", 1),
-                        "position": position,
-                        "entry": entry}}
+    payload = {
+        "item": {
+            "entry_type": "Item",
+            "points_possible": q.get("points_possible", 1),
+            "position": position,
+            "entry": entry,
+        }
+    }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
     if r.status_code in (200, 201):
         return True, None
@@ -237,6 +268,7 @@ def add_fimb_item(domain, course_id, assignment_id, q, token, position=1):
         return False, r.json()
     except Exception:
         return False, r.text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Matching — stems (prompts) -> choices (matches)
@@ -262,12 +294,10 @@ def add_matching_item(domain, course_id, assignment_id, q, token, position=1):
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
         "calculator_type": "none",
-        "interaction_data": {
-            "stems": stems,
-            "choices": choices
-        },
-        "scoring_algorithm": "Equivalence",
-        "scoring_data": {"pairs": pairs}
+        "interaction_data": {"stems": stems, "choices": choices},
+        # Scoring requires a `value` wrapper
+        "scoring_algorithm": "Match",
+        "scoring_data": {"value": {"pairs": pairs}},
     }
 
     fb = (q.get("feedback") or {})
@@ -275,10 +305,14 @@ def add_matching_item(domain, course_id, assignment_id, q, token, position=1):
     if qlevel:
         entry["feedback"] = qlevel
 
-    payload = {"item": {"entry_type": "Item",
-                        "points_possible": q.get("points_possible", 1),
-                        "position": position,
-                        "entry": entry}}
+    payload = {
+        "item": {
+            "entry_type": "Item",
+            "points_possible": q.get("points_possible", 1),
+            "position": position,
+            "entry": entry,
+        }
+    }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
     if r.status_code in (200, 201):
         return True, None
@@ -287,12 +321,14 @@ def add_matching_item(domain, course_id, assignment_id, q, token, position=1):
     except Exception:
         return False, r.text
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Numerical — exact w/ optional tolerance
 # ─────────────────────────────────────────────────────────────────────────────
 def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
     """
     Supports: numerical_question
+
     q['numerical_answer'] = {'exact': 12.5, 'tolerance': 0.5}  # tolerance optional
     """
     url = f"{_BASE(domain)}/api/quiz/v1/courses/{course_id}/quizzes/{assignment_id}/items"
@@ -301,13 +337,18 @@ def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
     exact = na.get("exact")
     tol = na.get("tolerance", 0)
 
+    # API expects `scoring_data.value` to be an array of acceptable numeric answers
+    val = {"exact": exact}
+    if tol is not None:
+        val["tolerance"] = tol
+
     entry = {
         "interaction_type_slug": "numeric",
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
         "calculator_type": "none",
         "scoring_algorithm": "Numeric",
-        "scoring_data": {"value": exact, "tolerance": tol}
+        "scoring_data": {"value": [val]},
     }
 
     fb = (q.get("feedback") or {})
@@ -315,10 +356,14 @@ def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
     if qlevel:
         entry["feedback"] = qlevel
 
-    payload = {"item": {"entry_type": "Item",
-                        "points_possible": q.get("points_possible", 1),
-                        "position": position,
-                        "entry": entry}}
+    payload = {
+        "item": {
+            "entry_type": "Item",
+            "points_possible": q.get("points_possible", 1),
+            "position": position,
+            "entry": entry,
+        }
+    }
     r = requests.post(url, headers=_H(token), json=payload, timeout=60)
     if r.status_code in (200, 201):
         return True, None
@@ -327,13 +372,22 @@ def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
     except Exception:
         return False, r.text
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatcher (call the right builder per question_type)
 # ─────────────────────────────────────────────────────────────────────────────
 def add_item_for_question(domain, course_id, assignment_id, q, token, position=1):
-    qtype = (q.get("question_type") or "").strip().lower()
+    """
+    Route by q['question_type'] and add the item.
+    Returns: (ok: bool, debug: any)
+    """
+    qtype = (q.get("question_type") or "").strip()
 
-    if qtype in ("multiple_choice_question", "multiple_answers_question", "true_false_question"):
+    if qtype in (
+        "multiple_choice_question",
+        "multiple_answers_question",
+        "true_false_question",
+    ):
         return add_choice_item(domain, course_id, assignment_id, q, token, position=position)
 
     if qtype == "short_answer_question":
@@ -351,4 +405,4 @@ def add_item_for_question(domain, course_id, assignment_id, q, token, position=1
     if qtype == "numerical_question":
         return add_numerical_item(domain, course_id, assignment_id, q, token, position=position)
 
-    return False, f"Unsupported question_type: {q.get('question_type')}"
+    return False, f"Unsupported question_type: {qtype}"
