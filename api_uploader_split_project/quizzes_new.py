@@ -331,11 +331,7 @@ def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
 # Dispatcher (call the right builder per question_type)
 # ─────────────────────────────────────────────────────────────────────────────
 def add_item_for_question(domain, course_id, assignment_id, q, token, position=1):
-    """
-    Route by q['question_type'] and add the item.
-    Returns: (ok: bool, debug: any)
-    """
-    qtype = (q.get("question_type") or "").strip()
+    qtype = (q.get("question_type") or "").strip().lower()
 
     if qtype in ("multiple_choice_question", "multiple_answers_question", "true_false_question"):
         return add_choice_item(domain, course_id, assignment_id, q, token, position=position)
@@ -355,4 +351,4 @@ def add_item_for_question(domain, course_id, assignment_id, q, token, position=1
     if qtype == "numerical_question":
         return add_numerical_item(domain, course_id, assignment_id, q, token, position=position)
 
-    return False, f"Unsupported question_type: {qtype}"
+    return False, f"Unsupported question_type: {q.get('question_type')}"
