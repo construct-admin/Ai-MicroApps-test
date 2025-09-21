@@ -679,55 +679,32 @@ if st.session_state.pages and st.session_state.visualized:
             did = add_discussion(canvas_domain, course_id, p["page_title"], html_result, canvas_token)
             return bool(did and add_to_module(canvas_domain, course_id, mid, "Discussion", did, p["page_title"], canvas_token))
 
+        if p["page_type"] == "quiz":
+            description = html_result
+            if quiz_json and isinstance(quiz_json, dict) and "quiz_description" in quiz_json:
+                description = quiz_json.get("quiz_description") or html_result
+
         if use_new_quizzes:
-                # Always create a New Quiz (LTI) for all supported types
-                assignment_id, err, status, raw = add_new_quiz(
-                    canvas_domain, course_id, p["page_title"], description, canvas_token
-                )
-                if not assignment_id:
-                    st.error(f"New Quiz (LTI) create failed [{status}]. {err}")
-                    return False
-
-                # Add ALL question types via the dispatcher
-                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-                failures = []
-                for pos, q in enumerate(q_list, start=1):
-                    ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
-                    if not ok:
-                        failures.append((pos, q.get("question_type"), dbg))
-
-                ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
-                if not ok:
-                    st.warning("Created New Quiz but failed to add it to the module.")
-
-                if failures:
-                    for pos, qt, dbg in failures:
-                        st.warning(f"Failed to add item {pos} ({qt}): {dbg}")
-                return ok and not failures
-
-
-                # Add ALL question types via dispatcher
-                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-                for pos, q in enumerate(q_list, start=1):
-                    ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
-                    if not ok:
-                        st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
-
-                ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
-                if not ok:
-                    st.warning("Created New Quiz but failed to add it to the module.")
-                return ok
-
-            else:  # classic quizzes path
-                qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
-                if qid:
-                    q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-                    for q in q_list:
-                        add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
-                    return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
+            assignment_id, err, status, raw = add_new_quiz(
+                canvas_domain, course_id, p["page_title"], description, canvas_token
+            )
+            if not assignment_id:
+                st.error(f"New Quiz (LTI) create failed [{status}]. {err}")
                 return False
 
-        return False
+            q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
+            failures = []
+            for pos, q in enumerate(q_list, start=1):
+                ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
+                if not ok:
+                    failures.append((pos, q.get("question_type"), dbg))
+                    st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
+
+            ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
+            if not ok:
+                st.warning("Created New Quiz but failed to add it to the module.")
+            return ok and not failures
+
 
     for tab_idx, tab in enumerate(tabs):
         target_type = type_map[tab_idx]
