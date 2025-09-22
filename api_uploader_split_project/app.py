@@ -7,10 +7,9 @@ import streamlit as st
 
 from utils import extract_tag
 
-# KB helpers (make sure kb.py is the fixed version I sent)
+# KB helpers (make sure kb.py is the fixed version)
 from kb import ensure_client, create_vector_store, upload_file_to_vs, vector_store_supported
-from openai import __version__ as openai_version  # for diagnostics display
-
+from openai import __version__ as openai_version  # diagnostics
 
 # Minimal gdoc helpers (only for optional DOCX export from a GDoc URL)
 from gdoc_utils import gdoc_id_from_url, fetch_docx_from_gdoc
@@ -18,11 +17,11 @@ from gdoc_utils import gdoc_id_from_url, fetch_docx_from_gdoc
 # Module-tag parsing
 from module_tags import split_text_by_module_tags
 
-# Your parsers
+# Parsers
 from parsers import (
     extract_canvas_pages_from_text,  # used for tag module content
-    extract_canvas_pages,
-    scan_canvas_page_tags,            # kept as legacy fallback
+    extract_canvas_pages,            # (legacy path, kept)
+    scan_canvas_page_tags,           # (legacy path, kept)
 )
 
 # Canvas
@@ -34,12 +33,23 @@ from canvas_api import (
 
 # Quizzes
 from quizzes_classic import add_quiz, add_quiz_question
-from quizzes_new import add_new_quiz, add_item_for_question  # <— new dispatcher
+from quizzes_new import add_new_quiz, add_item_for_question  # New Quizzes dispatcher
 
+# Debug: show which quizzes_new.py is loaded at runtime
+import quizzes_new as _qn
+import inspect as _inspect
 
 
 st.set_page_config(page_title="📄 DOCX → GPT (KB / Course Templates) → Canvas", layout="wide")
 st.title("📄 Upload DOCX → Convert via GPT (KB / Course Templates) → Upload to Canvas")
+
+# Small caption to confirm the imported quizzes_new module and version flag
+try:
+    st.caption(
+        f"quizzes_new path: {_inspect.getfile(_qn)} · schema={getattr(_qn, 'API_SCHEMA_VERSION', 'unknown')}"
+    )
+except Exception:
+    pass
 
 
 def _init_state():
@@ -314,7 +324,7 @@ with parse_cols[0]:
         raw_pages = extract_canvas_pages_from_text(tag_text) if tag_text else []
         if not raw_pages:
             st.warning("No <canvas_page> blocks found in this module. Tags are case-insensitive. Example:\n"
-                    "<canvas_page> ... </canvas_page>")
+                       "<canvas_page> ... </canvas_page>")
         raw_pages = extract_canvas_pages_from_text(tag_text) if tag_text else []
 
         # Build items with default module = selected module name
@@ -546,8 +556,8 @@ if st.session_state.pages:
                 "- table formatting must be converted to HTML tables with <table>, <tr>, <td> tags.\n"
                 "- <Table with Row Striping> is a tag and there is template code for it in the template document.\n"
                 "- <Table with Column Striping> is a tag and there is template code for it in the template document.\n"
-                "- <video> is also a tag with template code in the document. \n" 
-                "- There is a possibility of elements within elements. Please add in the code accordingly. \n" 
+                "- <video> is also a tag with template code in the document. \n"
+                "- There is a possibility of elements within elements. Please add in the code accordingly. \n"
                 "- Keep .bluePageHeader, .header, .divisionLineYellow, .landingPageFooter intact.\n\n"
                 "QUIZ RULES (when <page_type> is 'quiz'):\n"
                 "- Questions appear between <quiz_start> and </quiz_end>.\n"
@@ -597,7 +607,6 @@ if st.session_state.pages:
                 '{"question_type":"numerical_question","question_name":"...","question_text":"<p>Speed?</p>",'
                 '"numerical_answer":{"exact":12.5,"tolerance":0.5},'
                 '"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>"}}'
-                "]}\n"
                 "]}\n"
                 "COVERAGE (NO-DROP) RULES\n"
                 "- Do not omit or summarize any substantive content from the storyboard block.\n"
@@ -680,31 +689,42 @@ if st.session_state.pages and st.session_state.visualized:
             return bool(did and add_to_module(canvas_domain, course_id, mid, "Discussion", did, p["page_title"], canvas_token))
 
         if p["page_type"] == "quiz":
-            description = html_result
-            if quiz_json and isinstance(quiz_json, dict) and "quiz_description" in quiz_json:
-                description = quiz_json.get("quiz_description") or html_result
+            # Use quiz_description if present; fall back to HTML
+            description = (quiz_json or {}).get("quiz_description") if isinstance(quiz_json, dict) else None
+            description = description or html_result
 
-        if use_new_quizzes:
-            assignment_id, err, status, raw = add_new_quiz(
-                canvas_domain, course_id, p["page_title"], description, canvas_token
-            )
-            if not assignment_id:
-                st.error(f"New Quiz (LTI) create failed [{status}]. {err}")
-                return False
+            if use_new_quizzes:
+                assignment_id, err, status, raw = add_new_quiz(
+                    canvas_domain, course_id, p["page_title"], description, canvas_token
+                )
+                if not assignment_id:
+                    st.error(f"New Quiz (LTI) create failed [{status}]. {err}")
+                    return False
 
-            q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-            failures = []
-            for pos, q in enumerate(q_list, start=1):
-                ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
+                # Add ALL question types via the dispatcher
+                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
+                failures = []
+                for pos, q in enumerate(q_list, start=1):
+                    ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
+                    if not ok:
+                        failures.append((pos, q.get("question_type"), dbg))
+                        st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
+
+                ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
                 if not ok:
-                    failures.append((pos, q.get("question_type"), dbg))
-                    st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
+                    st.warning("Created New Quiz but failed to add it to the module.")
+                return ok and not failures
 
-            ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
-            if not ok:
-                st.warning("Created New Quiz but failed to add it to the module.")
-            return ok and not failures
+            # Classic quiz path only if the checkbox is OFF
+            qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
+            if qid:
+                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
+                for q in q_list:
+                    add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
+                return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
+            return False
 
+        return False
 
     for tab_idx, tab in enumerate(tabs):
         target_type = type_map[tab_idx]
