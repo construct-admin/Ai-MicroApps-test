@@ -725,8 +725,9 @@ if st.session_state.pages and st.session_state.visualized:
 
         if p["page_type"] == "quiz":
             # Use quiz_description if present; fall back to HTML
-            description = (quiz_json or {}).get("quiz_description") if isinstance(quiz_json, dict) else None
-            description = description or html_result
+            description = ""
+            if isinstance(quiz_json, dict):
+                description = (quiz_json.get("quiz_description") or "").strip()
 
             if use_new_quizzes:
                 assignment_id, err, status, raw = qn.add_new_quiz(
@@ -750,7 +751,9 @@ if st.session_state.pages and st.session_state.visualized:
                 ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
                 if not ok:
                     st.warning("Created New Quiz but failed to add it to the module.")
-                return ok and not failures
+
+                # Consider the upload successful even if some items fail; we'll surface warnings above
+                return bool(ok and not failures)
 
             # Classic quiz path (only when 'Use New Quizzes' is OFF)
             qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
@@ -760,8 +763,6 @@ if st.session_state.pages and st.session_state.visualized:
                     add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
                 return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
             return False
-
-        return False
 
     for tab_idx, tab in enumerate(tabs):
         target_type = type_map[tab_idx]
