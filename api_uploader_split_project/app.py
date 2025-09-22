@@ -36,9 +36,16 @@ from quizzes_classic import add_quiz, add_quiz_question
 from quizzes_new import add_new_quiz, add_item_for_question  # New Quizzes dispatcher
 
 # Debug: show which quizzes_new.py is loaded at runtime
-import quizzes_new as _qn
-import inspect as _inspect
+# import quizzes_new as _qn
+#import inspect as _inspect
 
+import importlib, quizzes_new as qn, inspect as _inspect
+
+st.caption(f"()"quizzes_new path: {_inspect.getfile(_qn)} · schema={getattr(_qn, 'API_SCHEMA_VERSION', 'unknown')}"
+)
+
+st.caption(f"quizzes_new path: {_inspect.getfile(qn)} · schema={getattr(qn, 'API_SCHEMA_VERSION', 'unknown')}"
+)
 
 st.set_page_config(page_title="📄 DOCX → GPT (KB / Course Templates) → Canvas", layout="wide")
 st.title("📄 Upload DOCX → Convert via GPT (KB / Course Templates) → Upload to Canvas")
@@ -694,7 +701,7 @@ if st.session_state.pages and st.session_state.visualized:
             description = description or html_result
 
             if use_new_quizzes:
-                assignment_id, err, status, raw = add_new_quiz(
+                assignment_id, err, status, raw = qn.add_new_quiz(
                     canvas_domain, course_id, p["page_title"], description, canvas_token
                 )
                 if not assignment_id:
@@ -705,7 +712,7 @@ if st.session_state.pages and st.session_state.visualized:
                 q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
                 failures = []
                 for pos, q in enumerate(q_list, start=1):
-                    ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
+                    ok, dbg = qn.add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
                     if not ok:
                         failures.append((pos, q.get("question_type"), dbg))
                         st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
