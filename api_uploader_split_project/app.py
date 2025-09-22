@@ -7,11 +7,11 @@ import streamlit as st
 
 from utils import extract_tag
 
-# KB helpers (make sure kb.py is the fixed version)
+# KB helpers
 from kb import ensure_client, create_vector_store, upload_file_to_vs, vector_store_supported
 from openai import __version__ as openai_version  # diagnostics
 
-# Minimal gdoc helpers (only for optional DOCX export from a GDoc URL)
+# Minimal gdoc helpers (optional DOCX export from a GDoc URL)
 from gdoc_utils import gdoc_id_from_url, fetch_docx_from_gdoc
 
 # Module-tag parsing
@@ -33,19 +33,8 @@ from canvas_api import (
 
 # Quizzes
 from quizzes_classic import add_quiz, add_quiz_question
-from quizzes_new import add_new_quiz, add_item_for_question  # New Quizzes dispatcher
-
-# Debug: show which quizzes_new.py is loaded at runtime
-# import quizzes_new as _qn
-#import inspect as _inspect
-
 import importlib, quizzes_new as qn, inspect as _inspect
-
-st.caption(f"()"quizzes_new path: {_inspect.getfile(_qn)} · schema={getattr(_qn, 'API_SCHEMA_VERSION', 'unknown')}"
-)
-
-st.caption(f"quizzes_new path: {_inspect.getfile(qn)} · schema={getattr(qn, 'API_SCHEMA_VERSION', 'unknown')}"
-)
+qn = importlib.reload(qn)  # ensure latest quizzes_new.py is used each run
 
 st.set_page_config(page_title="📄 DOCX → GPT (KB / Course Templates) → Canvas", layout="wide")
 st.title("📄 Upload DOCX → Convert via GPT (KB / Course Templates) → Upload to Canvas")
@@ -53,7 +42,7 @@ st.title("📄 Upload DOCX → Convert via GPT (KB / Course Templates) → Uploa
 # Small caption to confirm the imported quizzes_new module and version flag
 try:
     st.caption(
-        f"quizzes_new path: {_inspect.getfile(_qn)} · schema={getattr(_qn, 'API_SCHEMA_VERSION', 'unknown')}"
+        f"quizzes_new path: {_inspect.getfile(qn)} · schema={getattr(qn, 'API_SCHEMA_VERSION', 'unknown')}"
     )
 except Exception:
     pass
