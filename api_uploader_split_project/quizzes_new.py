@@ -3,6 +3,8 @@
 # fill-in-multiple-blanks, matching, numerical. Sends question-level feedback
 # and per-answer feedback where supported (choice-style).
 
+API_SCHEMA_VERSION = "2025-09-21b"
+
 import uuid
 import requests
 
@@ -144,7 +146,6 @@ def add_short_answer_item(domain, course_id, assignment_id, q, token, position=1
         "title": q.get("question_name") or "Question",
         "item_body": q.get("question_text") or "",
         "calculator_type": "none",
-        "interaction_data": {"caseSensitive": False},
         # Required for SA-type questions
         "user_response_type": "string",
         # Use Equivalence with an array of acceptable strings
@@ -338,7 +339,9 @@ def add_numerical_item(domain, course_id, assignment_id, q, token, position=1):
     tol = na.get("tolerance", 0)
 
     # API expects `scoring_data.value` to be an array of acceptable numeric answers
-    val = {"exact": exact}
+    val = {}
+    if exact is not None:
+        val["exact"] = exact
     if tol is not None:
         val["tolerance"] = tol
 
