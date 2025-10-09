@@ -2,14 +2,17 @@
 import re
 import json
 from io import BytesIO
+import time, hashlib
 
 import streamlit as st
 
 from utils import extract_tag
 
-# KB helpers
+# KB helpers (make sure kb.py is the fixed version I sent)
 from kb import ensure_client, create_vector_store, upload_file_to_vs, vector_store_supported
-from openai import __version__ as openai_version  # diagnostics
+from openai import __version__ as openai_version  # for diagnostics display
+from openai import OpenAI, RateLimitError, APIError
+
 
 # Minimal gdoc helpers (only for optional DOCX export from a GDoc URL)
 from gdoc_utils import gdoc_id_from_url, fetch_docx_from_gdoc
@@ -17,14 +20,14 @@ from gdoc_utils import gdoc_id_from_url, fetch_docx_from_gdoc
 # Module-tag parsing
 from module_tags import split_text_by_module_tags
 
-# Parsers
+# Your parsers
 from parsers import (
-    extract_canvas_pages_from_text,   # used for tag module content
-    extract_canvas_pages,             # (legacy path, kept)
-    scan_canvas_page_tags,            # (legacy path, kept)
+    extract_canvas_pages_from_text,  # used for tag module content
+    extract_canvas_pages,
+    scan_canvas_page_tags,            # kept as legacy fallback
 )
 
-# Canvas API
+# Canvas
 from canvas_api import (
     list_modules, list_module_items, get_page_body, get_discussion_body,
     get_quiz_description, get_assignment_description, get_or_create_module,
@@ -33,29 +36,14 @@ from canvas_api import (
 
 # Quizzes
 from quizzes_classic import add_quiz, add_quiz_question
-import quizzes_new as qn  # New Quizzes dispatcher
-
-import inspect as _inspect
+from quizzes_new import add_new_quiz, add_item_for_question  # <— new dispatcher
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Page header
-# ──────────────────────────────────────────────────────────────────────────────
+
 st.set_page_config(page_title="📄 DOCX → GPT (KB / Course Templates) → Canvas", layout="wide")
 st.title("📄 Upload DOCX → Convert via GPT (KB / Course Templates) → Upload to Canvas")
 
-# Debug: show which quizzes_new.py is loaded at runtime
-try:
-    st.caption(
-        f"quizzes_new path: {_inspect.getfile(qn)} · schema={getattr(qn, 'API_SCHEMA_VERSION', 'unknown')}"
-    )
-except Exception:
-    pass
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# State
-# ──────────────────────────────────────────────────────────────────────────────
 def _init_state():
     defaults = {
         # Parsed + results
@@ -68,10 +56,8 @@ def _init_state():
 
         # Canvas caches
         "course_modules": [],
-        "module_pages_cache": {},
-        "module_discussions_cache": {},
-        "module_quizzes_cache": {},
-        "module_assignments_cache": {},
+        "module_pages_cache": {}, "module_discussions_cache": {},
+        "module_quizzes_cache": {}, "module_assignments_cache": {},
         "per_item_course_template_html": {},
 
         # Upload selection
@@ -91,6 +77,27 @@ def _init_state():
             st.session_state[k] = v
 
 
+
+def call_openai_with_retry(client: OpenAI, **kwargs) -> str:
+    """
+    Wrapper around client.responses.create with exponential backoff for 429/5xx.
+    Returns output_text (empty string if missing).
+    """
+    delay = 1.5
+    for _ in range(6):
+        try:
+            resp = client.responses.create(**kwargs)
+            return getattr(resp, "output_text", "") or ""
+        except RateLimitError:
+            time.sleep(delay); delay *= 1.8
+        except APIError as e:
+            code = getattr(e, "status_code", 500)
+            if code and int(code) >= 500:
+                time.sleep(delay); delay *= 1.8
+            else:
+                raise
+    resp = client.responses.create(**kwargs)
+    return getattr(resp, "output_text", "") or ""
 _init_state()
 
 
@@ -176,7 +183,7 @@ with st.expander("📝 Storyboard Settings", expanded=True):
 # 2) Knowledge Base (optional)
 # ──────────────────────────────────────────────────────────────────────────────
 with st.expander("📚 Knowledge Base (Vector Store) — optional", expanded=False):
-    kb1, kb2, kb3, kb4 = st.columns([1, 1, 1, 1])
+    kb1, kb2, kb3, kb4 = st.columns([1,1,1,1])
     with kb1:
         existing_vs = st.text_input("Vector Store ID", value=st.session_state.get("vector_store_id") or "")
     with kb2:
@@ -207,8 +214,7 @@ with st.expander("📚 Knowledge Base (Vector Store) — optional", expanded=Fal
             "`pip install --upgrade openai` and restart the app."
         )
 
-    btns = st.columns([1, 1, 1])
-
+    btns = st.columns([1,1,1])
     # Create Vector Store
     with btns[0]:
         if st.button("Create Vector Store", use_container_width=True, disabled=not (kb_client and kb_supported)):
@@ -221,11 +227,8 @@ with st.expander("📚 Knowledge Base (Vector Store) — optional", expanded=Fal
 
     # Upload template to VS
     with btns[1]:
-        if st.button(
-            "Upload Template to KB",
-            use_container_width=True,
-            disabled=not ((st.session_state.get("vector_store_id") or existing_vs) and kb_client and kb_supported),
-        ):
+        if st.button("Upload Template to KB", use_container_width=True,
+                     disabled=not ((st.session_state.get("vector_store_id") or existing_vs) and kb_client and kb_supported)):
             try:
                 vs_id = (st.session_state.get("vector_store_id") or existing_vs).strip()
                 got = None
@@ -243,7 +246,7 @@ with st.expander("📚 Knowledge Base (Vector Store) — optional", expanded=Fal
                 else:
                     data, fname = got
                     res = upload_file_to_vs(kb_client, vs_id, data, fname)
-                    status, via = res.get("status"), res.get("via", "?")
+                    status, via = res.get("status"), res.get("via","?")
                     if status == "completed":
                         st.success(f"✅ Template uploaded ({via}).")
                     elif status == "uploaded_file_only_no_vector_store_support":
@@ -279,7 +282,6 @@ with st.expander("🎓 Canvas Credentials & Course Structure", expanded=True):
         canvas_token = st.text_input("Canvas API Token", type="password")
     with can3:
         st.write("")
-
     if st.button("Load Modules", use_container_width=True, disabled=not (canvas_domain and course_id and canvas_token)):
         try:
             mods = list_modules(canvas_domain, course_id, canvas_token)
@@ -287,7 +289,6 @@ with st.expander("🎓 Canvas Credentials & Course Structure", expanded=True):
             st.success(f"Loaded {len(mods)} module(s) from the course.")
         except Exception as e:
             st.error(f"Failed to load modules: {e}")
-
     if st.session_state.course_modules:
         st.caption("Existing modules:")
         st.write(", ".join([m["name"] for m in st.session_state.course_modules]))
@@ -297,9 +298,15 @@ with st.expander("🎓 Canvas Credentials & Course Structure", expanded=True):
 # 4) OpenAI API credentials
 # ──────────────────────────────────────────────────────────────────────────────
 with st.expander("🤖 OpenAI API Credentials", expanded=True):
-    st.session_state["_openai_key"] = st.text_input(
-        "OpenAI API Key", type="password", value=st.session_state.get("_openai_key", "")
-    )
+    st.session_state["_openai_key"] = st.text_input("OpenAI API Key", type="password",
+                                                    value=st.session_state.get("_openai_key", ""))
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        st.session_state["gpt_model"] = st.selectbox("Model", ["gpt-4o", "gpt-4o-mini"], index=0)
+    with c2:
+        st.session_state["gpt_max_tokens"] = st.number_input("Max output tokens", min_value=256, max_value=8192, value=2000, step=128)
+    with c3:
+        st.session_state["gpt_throttle"] = st.number_input("Throttle per call (sec)", min_value=0.0, max_value=2.0, value=0.4, step=0.1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -333,16 +340,12 @@ with parse_cols[0]:
 
         if tag_text:
             diag = scan_canvas_page_tags(tag_text)
-            st.caption(
-                f"Canvas-page tags → start: {diag['starts']}  end: {diag['ends']}  balanced: {diag['balanced']}"
-            )
-
+            st.caption(f"Canvas-page tags → start: {diag['starts']}  end: {diag['ends']}  balanced: {diag['balanced']}")
         raw_pages = extract_canvas_pages_from_text(tag_text) if tag_text else []
         if not raw_pages:
-            st.warning(
-                "No <canvas_page> blocks found in this module. Tags are case-insensitive. Example:\n"
-                "<canvas_page> ... </canvas_page>"
-            )
+            st.warning("No <canvas_page> blocks found in this module. Tags are case-insensitive. Example:\n"
+                    "<canvas_page> ... </canvas_page>")
+        raw_pages = extract_canvas_pages_from_text(tag_text) if tag_text else []
 
         # Build items with default module = selected module name
         last_known_module = tag_name or "General"
@@ -355,24 +358,22 @@ with parse_cols[0]:
             if page_type not in TYPE_OPTIONS:
                 page_type = "page"
 
-            page_title = (extract_tag("page_title", block) or f"Page {idx + 1}").strip()
+            page_title = (extract_tag("page_title", block) or f"Page {idx+1}").strip()
             module_name = (extract_tag("module_name", block) or last_known_module or "General").strip()
             page_template_name = (extract_tag("page_template", block) or "").strip()
             last_known_module = module_name
 
-            st.session_state.pages.append(
-                {
-                    "index": idx,
-                    "raw": block,
-                    "page_type": page_type,
-                    "page_title": page_title,
-                    "module_name": module_name,
-                    "page_template_from_doc": page_template_name,
-                    "template_source": "kb",
-                    "template_module_id": None,
-                    "template_course_item": None,
-                }
-            )
+            st.session_state.pages.append({
+                "index": idx,
+                "raw": block,
+                "page_type": page_type,
+                "page_title": page_title,
+                "module_name": module_name,
+                "page_template_from_doc": page_template_name,
+                "template_source": "kb",
+                "template_module_id": None,
+                "template_course_item": None,
+            })
 
         st.success(f"✅ Parsed {len(st.session_state.pages)} item(s) from '{tag_name}'.")
 
@@ -381,7 +382,8 @@ with parse_cols[0]:
 if st.session_state.pages:
     st.subheader("🔍 Parsed items (from selected module)")
     summary_rows = [
-        f"- **{p['page_title']}** — *{p['page_type']}* · Module: `{p['module_name']}`" for p in st.session_state.pages
+        f"- **{p['page_title']}** — *{p['page_type']}* · Module: `{p['module_name']}`"
+        for p in st.session_state.pages
     ]
     st.markdown("\n".join(summary_rows))
 
@@ -412,7 +414,10 @@ if st.session_state.pages:
                 if curr_type not in TYPE_OPTIONS:
                     curr_type = "page"
                 p["page_type"] = st.selectbox(
-                    "Content Type", options=TYPE_OPTIONS, index=TYPE_OPTIONS.index(curr_type), key=f"type_{i}"
+                    "Content Type",
+                    options=TYPE_OPTIONS,
+                    index=TYPE_OPTIONS.index(curr_type),
+                    key=f"type_{i}"
                 )
 
             with c2:
@@ -424,27 +429,22 @@ if st.session_state.pages:
 
             with c3:
                 p["template_source"] = st.selectbox(
-                    "Template Source", ["kb", "course"], index=["kb", "course"].index(p.get("template_source", "kb")), key=f"ts_{i}"
+                    "Template Source", ["kb", "course"],
+                    index=["kb", "course"].index(p.get("template_source", "kb")),
+                    key=f"ts_{i}"
                 )
 
             st.caption("Storyboard block (raw)")
             st.text_area("raw", value=p["raw"], height=150, key=f"raw_{i}")
 
             # Course Template Picker
-            if (
-                p["template_source"] == "course"
-                and st.session_state.course_modules
-                and canvas_domain
-                and course_id
-                and canvas_token
-            ):
-                st.markdown(
-                    "**Course Template Picker** — choose the module where template items live, then pick one."
-                )
+            if p["template_source"] == "course" and st.session_state.course_modules and canvas_domain and course_id and canvas_token:
+                st.markdown("**Course Template Picker** — choose the module where template items live, then pick one.")
                 tm_cols = st.columns([1, 1, 1])
                 with tm_cols[0]:
                     tm_pick = st.selectbox(
-                        "Template Module", ["(pick module)"] + [m["name"] for m in st.session_state.course_modules], key=f"tmpl_mod_{i}"
+                        "Template Module", ["(pick module)"] + [m["name"] for m in st.session_state.course_modules],
+                        key=f"tmpl_mod_{i}"
                     )
                 if tm_pick and tm_pick != "(pick module)":
                     mod_id = None
@@ -458,35 +458,29 @@ if st.session_state.pages:
                             items = list_module_items(canvas_domain, course_id, mod_id, canvas_token)
                             st.session_state.module_pages_cache[mod_id] = [
                                 {"title": it.get("title"), "page_url": it.get("page_url")}
-                                for it in items
-                                if it.get("type") == "Page" and it.get("page_url")
+                                for it in items if it.get("type") == "Page" and it.get("page_url")
                             ]
                             st.session_state.module_discussions_cache[mod_id] = [
                                 {"title": it.get("title"), "id": it.get("content_id")}
-                                for it in items
-                                if it.get("type") == "Discussion" and it.get("content_id")
+                                for it in items if it.get("type") == "Discussion" and it.get("content_id")
                             ]
                             st.session_state.module_quizzes_cache[mod_id] = [
                                 {"title": it.get("title"), "id": it.get("content_id"), "classic": True}
-                                for it in items
-                                if it.get("type") == "Quiz" and it.get("content_id")
+                                for it in items if it.get("type") == "Quiz" and it.get("content_id")
                             ]
                             st.session_state.module_assignments_cache[mod_id] = [
                                 {"title": it.get("title"), "id": it.get("content_id")}
-                                for it in items
-                                if it.get("type") == "Assignment" and it.get("content_id")
+                                for it in items if it.get("type") == "Assignment" and it.get("content_id")
                             ]
 
                         if p["page_type"] == "page":
-                            page_opts = ["(pick page)"] + [
-                                x["title"] for x in st.session_state.module_pages_cache.get(mod_id, [])
-                            ]
+                            page_opts = ["(pick page)"] + [x["title"] for x in st.session_state.module_pages_cache.get(mod_id, [])]
                             with tm_cols[1]:
                                 page_pick = st.selectbox("Template Page", page_opts, key=f"tmpl_page_{i}")
                             if page_pick and page_pick != "(pick page)":
                                 page_url = next(
                                     (x["page_url"] for x in st.session_state.module_pages_cache[mod_id] if x["title"] == page_pick),
-                                    None,
+                                    None
                                 )
                                 if page_url:
                                     html, _ = get_page_body(canvas_domain, course_id, page_url, canvas_token)
@@ -494,15 +488,13 @@ if st.session_state.pages:
                                     st.success("Loaded page template HTML.")
 
                         elif p["page_type"] == "discussion":
-                            disc_opts = ["(pick discussion)"] + [
-                                x["title"] for x in st.session_state.module_discussions_cache.get(mod_id, [])
-                            ]
+                            disc_opts = ["(pick discussion)"] + [x["title"] for x in st.session_state.module_discussions_cache.get(mod_id, [])]
                             with tm_cols[1]:
                                 disc_pick = st.selectbox("Template Discussion", disc_opts, key=f"tmpl_disc_{i}")
                             if disc_pick and disc_pick != "(pick discussion)":
                                 did = next(
                                     (x["id"] for x in st.session_state.module_discussions_cache[mod_id] if x["title"] == disc_pick),
-                                    None,
+                                    None
                                 )
                                 if did:
                                     html, _ = get_discussion_body(canvas_domain, course_id, did, canvas_token)
@@ -510,12 +502,8 @@ if st.session_state.pages:
                                     st.success("Loaded discussion template HTML.")
 
                         elif p["page_type"] == "quiz":
-                            q_opts = ["(pick classic quiz)"] + [
-                                x["title"] for x in st.session_state.module_quizzes_cache.get(mod_id, [])
-                            ]
-                            a_opts = ["(pick assignment)"] + [
-                                x["title"] for x in st.session_state.module_assignments_cache.get(mod_id, [])
-                            ]
+                            q_opts = ["(pick classic quiz)"] + [x["title"] for x in st.session_state.module_quizzes_cache.get(mod_id, [])]
+                            a_opts = ["(pick assignment)"] + [x["title"] for x in st.session_state.module_assignments_cache.get(mod_id, [])]
                             with tm_cols[1]:
                                 quiz_pick = st.selectbox("Template (Classic Quiz)", q_opts, key=f"tmpl_quiz_{i}")
                             with tm_cols[2]:
@@ -523,7 +511,7 @@ if st.session_state.pages:
                             if quiz_pick and quiz_pick != "(pick classic quiz)":
                                 qid = next(
                                     (x["id"] for x in st.session_state.module_quizzes_cache[mod_id] if x["title"] == quiz_pick),
-                                    None,
+                                    None
                                 )
                                 if qid:
                                     desc, _ = get_quiz_description(canvas_domain, course_id, qid, canvas_token)
@@ -532,7 +520,7 @@ if st.session_state.pages:
                             elif asg_pick and asg_pick != "(pick assignment)":
                                 aid = next(
                                     (x["id"] for x in st.session_state.module_assignments_cache[mod_id] if x["title"] == asg_pick),
-                                    None,
+                                    None
                                 )
                                 if aid:
                                     desc, _ = get_assignment_description(canvas_domain, course_id, aid, canvas_token)
@@ -561,22 +549,14 @@ if st.session_state.pages:
         default_checked = st.session_state.get(f"viz_sel_{i}", False)
         checked = st.checkbox(
             f"{p['page_title']}  ({p['page_type']}) · Module: {p['module_name']}",
-            value=default_checked,
-            key=f"viz_sel_{i}",
+            value=default_checked, key=f"viz_sel_{i}"
         )
         if checked:
             selected_indices.append(i)
 
-    if st.button(
-        "🔎 Visualize selected (no upload)",
-        type="primary",
-        use_container_width=True,
-        disabled=not (st.session_state.get("_openai_key") and selected_indices),
-    ):
-        from openai import OpenAI
-
-        client = OpenAI(api_key=st.session_state.get("_openai_key", ""))
-
+    if st.button("🔎 Visualize selected (no upload)", type="primary", use_container_width=True,
+                 disabled=not (st.session_state.get("_openai_key") and selected_indices)):
+        client = ensure_client(st.session_state.get("_openai_key", ""))
         for idx in selected_indices:
             p = st.session_state.pages[idx]
             raw_block = p["raw"]
@@ -585,103 +565,109 @@ if st.session_state.pages:
                 "You are an expert Canvas HTML generator.\n"
                 "- Preserve ALL <a href> links and any <img> or <table> in the storyboard.\n"
                 "- Replace only inner content of template areas; keep structure/classes/attributes intact.\n"
-                "  If a section has no content, remove that template section in place; append extra sections at the end.\n"
-                "- If a section does not exist in the template, create it with the same structure.\n"
+                "  if a section has no content, remove the template section in place; append extra sections at the end.\n"
+                "- if a section does not exist in the template, create it with the same structure.\n"
                 "- <element_type> tags are used to mark template code associations found within the file_search.\n"
-                "- <accordion_title> is for the <summary> of details/accordion; <accordion_content> is its content.\n"
-                "- Table formatting must become proper HTML tables (<table>, <tr>, <td> tags).\n"
-                "- The following are tag names with template code in the KB: <Table with Row Striping>, <Table with Column Striping>, <video>.\n"
-                "- Elements may be nested; keep nesting intact.\n"
+                "- If some content does not map, append it as it appears in the storyboard."
+                "- if a section does not exist in the template, create it with the same structure.\n"
+                "- <element_type> tags are used to mark template code associations found within the file_search.\n"
+                "- <accordion_title> are used for the summary tag in html accordions.\n"
+                "- <accordion_content> are used for the content inside the accordion.\n"
+                "- table formatting must be converted to HTML tables with <table>, <tr>, <td> tags.\n"
+                "- <Table with Row Striping> is a tag and there is template code for it in the template document.\n"
+                "- <Table with Column Striping> is a tag and there is template code for it in the template document.\n"
+                "- <video> is also a tag with template code in the document. \n" 
+                "- There is a possibility of elements within elements. Please add in the code accordingly. \n" 
                 "- Keep .bluePageHeader, .header, .divisionLineYellow, .landingPageFooter intact.\n\n"
                 "QUIZ RULES (when <page_type> is 'quiz'):\n"
                 "- Questions appear between <quiz_start> and </quiz_end>.\n"
                 "- <multiple_choice> blocks use '*' prefix to mark correct choices.\n"
                 "- If <shuffle> appears inside a question, set \"shuffle\": true; else false.\n"
-                "- Question-level feedback tags (optional): "
-                "<feedback_correct>..</feedback_correct>, <feedback_incorrect>..</feedback_incorrect>, <feedback_neutral>..</feedback_neutral>\n"
+                "- Question-level feedback tags (optional):\n"
+                "  <feedback_correct>...</feedback_correct>, <feedback_incorrect>...</feedback_incorrect>, <feedback_neutral>...</feedback_neutral>\n"
                 "- Per-answer feedback (optional): '(feedback: ...)' after a choice line or <feedback>A: ...</feedback>.\n"
                 "RETURN:\n"
                 "1) Canvas-ready HTML (no code fences) and no other comments\n"
                 "2) If page_type is 'quiz', append a JSON object at the very END (no extra text) with:\n"
                 "- Support these Canvas-compatible question types:\n"
-                "  multiple_choice_question, multiple_answers_question, true_false_question, essay_question, "
-                "  short_answer_question, fill_in_multiple_blanks_question, matching_question, numerical_question.\n"
+                "  multiple_choice_question (single correct), multiple_answers_question (checkboxes), true_false_question, "
+                "  essay_question, short_answer_question (fill-in-one-blank), fill_in_multiple_blanks_question, "
+                "  matching_question, numerical_question.\n"
                 "- Include per-answer feedback when available, and overall feedback via a 'feedback' object "
                 "(keys: 'correct','incorrect','neutral').\n"
                 "JSON SCHEMA EXAMPLES (use only fields relevant to each type; keep it MINIFIED):\n"
                 '{"quiz_description":"<p>Intro...</p>","questions":['
+                # multiple choice
                 '{"question_type":"multiple_choice_question","question_name":"...","question_text":"<p>...</p>",'
                 '"answers":[{"text":"A","is_correct":false,"feedback":"<p>...</p>"},{"text":"B","is_correct":true,"feedback":"<p>...</p>"}],'
                 '"shuffle":true,"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>","neutral":"<p>...</p>"}},'
+                # multiple answers (checkboxes)
                 '{"question_type":"multiple_answers_question","question_name":"...","question_text":"<p>...</p>",'
                 '"answers":[{"text":"A","is_correct":true,"feedback":"<p>...</p>"},{"text":"B","is_correct":true,"feedback":"<p>...</p>"},'
                 '{"text":"C","is_correct":false,"feedback":"<p>...</p>"}],'
                 '"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>"}},'
+                # true/false
                 '{"question_type":"true_false_question","question_name":"...","question_text":"<p>...</p>",'
                 '"answers":[{"text":"True","is_correct":false,"feedback":"<p>...</p>"},{"text":"False","is_correct":true,"feedback":"<p>...</p>"}],'
                 '"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>"}},'
+                # essay
                 '{"question_type":"essay_question","question_name":"...","question_text":"<p>...</p>",'
                 '"feedback":{"neutral":"<p>Instructor graded.</p>"}},'
+                # short answer (single blank; list acceptable strings)
                 '{"question_type":"short_answer_question","question_name":"...","question_text":"<p>...</p>",'
                 '"answers":[{"text":"chlorophyll"},{"text":"chlorophyl"}],'
                 '"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>"}},'
+                # fill in multiple blanks (use {{blank_id}} in question_text; map answers by blank_id)
                 '{"question_type":"fill_in_multiple_blanks_question","question_name":"...","question_text":"<p>H{{b1}}O is {{b2}}.</p>",'
                 '"answers":[{"blank_id":"b1","text":"2","feedback":"<p>...</p>"},{"blank_id":"b2","text":"water","feedback":"<p>...</p>"}]},'
+                # matching
                 '{"question_type":"matching_question","question_name":"...","question_text":"<p>Match:</p>",'
                 '"matches":[{"prompt":"H2O","match":"water","feedback":"<p>...</p>"},{"prompt":"NaCl","match":"salt","feedback":"<p>...</p>"}]},'
+                # numerical (exact or exact+tolerance)
                 '{"question_type":"numerical_question","question_name":"...","question_text":"<p>Speed?</p>",'
                 '"numerical_answer":{"exact":12.5,"tolerance":0.5},'
                 '"feedback":{"correct":"<p>...</p>","incorrect":"<p>...</p>"}}'
                 "]}\n"
+                "]}\n"
                 "COVERAGE (NO-DROP) RULES\n"
                 "- Do not omit or summarize any substantive content from the storyboard block.\n"
-                "- Every sentence/line from the storyboard MUST appear in the output HTML (preserve order as much as possible).\n"
-                "- Never remove <img>, <table>, or explicit HTML already present; include them verbatim.\n"
+                "- Every sentence/line from the storyboard (between <canvas_page>…</canvas_page>) MUST appear in the output HTML.\n"
+                "- If a piece of storyboard content doesn’t clearly map to a template section, append it as it appears in the storyboard.\n"
+                "- Preserve the original order of content as much as possible.\n"
+                "- Never remove <img>, <table>, or any explicit HTML already present in the storyboard; include them verbatim.\n"
             )
 
             template_html = None
             if p["template_source"] == "course":
                 template_html = st.session_state.per_item_course_template_html.get(idx)
-
             tools = None
             if p["template_source"] == "kb" and st.session_state.get("vector_store_id"):
-                # The utils expect this shape; if SDK lacks VS support, utils already no-op.
                 tools = [{"type": "file_search", "vector_store_ids": [st.session_state["vector_store_id"]]}]
 
             if template_html:
                 SYSTEM = base_rules + "\nUse the TEMPLATE HTML verbatim where structure exists. Return HTML only."
                 USER = f"TEMPLATE HTML:\n{template_html}\n\nSTORYBOARD PAGE BLOCK:\n{raw_block}\n"
             else:
-                SYSTEM = base_rules + (
-                    "\nUse file_search to locate the best matching template if available. Return HTML only." if tools else ""
-                )
+                SYSTEM = base_rules + ("\nUse file_search to locate the best matching template if available. Return HTML only." if tools else "")
                 USER = f"STORYBOARD PAGE BLOCK:\n{raw_block}\n"
 
-            try:
-                kwargs = {
-                    "model": "gpt-4o",
-                    "input": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": USER}],
-                }
-                if tools:
-                    kwargs["tools"] = tools
+            from openai import OpenAI
+            kwargs = {"model": "gpt-4o", "input": [{"role": "system", "content": SYSTEM},
+                                                    {"role": "user", "content": USER}]}
+            if tools:
+                kwargs["tools"] = tools
+            response = OpenAI(api_key=st.session_state.get("_openai_key", "")).responses.create(**kwargs)
 
-                response = client.responses.create(**kwargs)
-                raw_out = response.output_text or ""
-            except Exception as e:
-                st.error(f"OpenAI error while visualizing '{p['page_title']}': {e}")
-                continue
-
-            # Drop any accidental ``` fencing
+            raw_out = raw_out
             cleaned = re.sub(r"```(html|json)?", "", raw_out, flags=re.IGNORECASE).strip()
 
-            # If this is a quiz, try to split trailing JSON from HTML
             json_match = re.search(r"({[\s\S]+})\s*$", cleaned)
             quiz_json = None
             html_result = cleaned
             if json_match and p["page_type"] == "quiz":
                 try:
                     quiz_json = json.loads(json_match.group(1))
-                    html_result = cleaned[: json_match.start()].strip()
+                    html_result = cleaned[:json_match.start()].strip()
                 except Exception:
                     quiz_json = None
 
@@ -724,45 +710,54 @@ if st.session_state.pages and st.session_state.visualized:
             return bool(did and add_to_module(canvas_domain, course_id, mid, "Discussion", did, p["page_title"], canvas_token))
 
         if p["page_type"] == "quiz":
-            # Use quiz_description if present; fall back to HTML
-            description = ""
-            if isinstance(quiz_json, dict):
-                description = (quiz_json.get("quiz_description") or "").strip()
+            description = html_result
+            if quiz_json and isinstance(quiz_json, dict) and "quiz_description" in quiz_json:
+                description = quiz_json.get("quiz_description") or html_result
 
             if use_new_quizzes:
-                assignment_id, err, status, raw = qn.add_new_quiz(
+                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
+                unsupported = [
+                    q for q in q_list
+                    if q.get("question_type") not in ("multiple_choice_question", "multiple_answers_question", "true_false_question")
+                ]
+                if unsupported:
+                    # Fallback to classic if unsupported types present
+                    qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
+                    if qid:
+                        for q in q_list:
+                            add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
+                        return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
+                    return False
+                else:
+                    assignment_id, err, status, raw = add_new_quiz(
                     canvas_domain, course_id, p["page_title"], description, canvas_token
                 )
                 if not assignment_id:
                     st.error(f"New Quiz (LTI) create failed [{status}]. {err}")
                     return False
 
-                # Add ALL question types via the dispatcher
+                # Add ALL question types via dispatcher
                 q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-                failures = []
                 for pos, q in enumerate(q_list, start=1):
-                    ok, dbg = qn.add_item_for_question(
-                        canvas_domain, course_id, assignment_id, q, canvas_token, position=pos
-                    )
+                    ok, dbg = add_item_for_question(canvas_domain, course_id, assignment_id, q, canvas_token, position=pos)
                     if not ok:
-                        failures.append((pos, q.get("question_type"), dbg))
                         st.warning(f"Failed to add item {pos} ({q.get('question_type')}): {dbg}")
 
                 ok = add_to_module(canvas_domain, course_id, mid, "Assignment", assignment_id, p["page_title"], canvas_token)
                 if not ok:
                     st.warning("Created New Quiz but failed to add it to the module.")
+                return ok
 
-                # Consider the upload successful even if some items fail; we'll surface warnings above
-                return bool(ok and not failures)
+            else:  # classic quizzes path
+                qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
+                if qid:
+                    q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
+                    for q in q_list:
+                        add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
+                    return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
+                return False
 
-            # Classic quiz path (only when 'Use New Quizzes' is OFF)
-            qid = add_quiz(canvas_domain, course_id, p["page_title"], description, canvas_token)
-            if qid:
-                q_list = (quiz_json or {}).get("questions", []) if isinstance(quiz_json, dict) else []
-                for q in q_list:
-                    add_quiz_question(canvas_domain, course_id, qid, q, canvas_token)
-                return add_to_module(canvas_domain, course_id, mid, "Quiz", qid, p["page_title"], canvas_token)
-            return False
+        return False
 
     for tab_idx, tab in enumerate(tabs):
         target_type = type_map[tab_idx]
@@ -780,7 +775,7 @@ if st.session_state.pages and st.session_state.visualized:
             with tcols[2]:
                 do_tab_upload = st.button(
                     f"🚀 Upload Selected {target_type.title()}s",
-                    disabled=dry_run or not (canvas_domain and course_id and canvas_token),
+                    disabled=dry_run or not (canvas_domain and course_id and canvas_token)
                 )
 
             for p in items:
@@ -803,10 +798,7 @@ if st.session_state.pages and st.session_state.visualized:
                     can_upload = (not dry_run) and (canvas_domain and course_id and canvas_token)
                     if st.button(f"Upload '{p['page_title']}'", key=f"upl_{idx}", disabled=not can_upload):
                         ok = _upload_item(p, html_result, quiz_json)
-                        if ok:
-                            st.success("✅ Uploaded and added to module.")
-                        else:
-                            st.error("❌ Upload failed.")
+                        st.success("✅ Uploaded and added to module.") if ok else st.error("❌ Upload failed.")
 
             if do_tab_upload and not dry_run:
                 for p in items:
