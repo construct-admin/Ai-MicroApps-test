@@ -1,8 +1,8 @@
-openai
-streamlit
+streamlit>=1.33.0
+openai>=1.45.0
+python-dotenv>=1.0.1
 streamlit_extras
 st-gsheets-connection
-python-dotenv
 pandasql
 anthropic
 google-generativeai
