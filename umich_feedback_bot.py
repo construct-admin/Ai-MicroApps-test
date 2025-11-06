@@ -629,7 +629,7 @@ if generate_all:
                 fb = fb.strip()
                 q_text = q_text.strip()
 
-                formatted_output.append(f"**{i}. {q_text}**\n\n{fb}\n\n---\n")
+                formatted_output.append(f"{i}. {q_text}\n\n{fb}\n\n---\n")
 
             all_results.append(
                 {
