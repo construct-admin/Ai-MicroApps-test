@@ -286,18 +286,26 @@ def generate_bulk_feedback(
 def lines_to_questions(text: str) -> List[str]:
     """
     Extracts meaningful quiz questions or prompts from pasted text.
-    Works even if the quiz markup is pasted as one long line.
+    Handles single-line CLD pastes and strips <Feedback> text completely.
     """
     import unicodedata
 
+    # Normalize Unicode and remove zero-width spaces
     text = unicodedata.normalize("NFKC", text)
     text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)
 
-    # --- Force newlines around XML-ish tags so we can split safely ---
+    # --- Remove <Feedback> blocks (they have no closing tags) ---
+    text = re.sub(
+        r"<Feedback>.*?(?=<question>|</question>|</quiz>|$)",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # --- Force newlines around XML-ish tags ---
     text = re.sub(r"(</?[^>]+>)", r"\n\1\n", text)
     text = re.sub(r"\s*\n\s*", "\n", text)
 
-    # --- Now split into lines and clean ---
     cleaned = []
     buffer = []
 
@@ -309,7 +317,6 @@ def lines_to_questions(text: str) -> List[str]:
         r"^options[:\s]*$",
         r"^\*?\s*a:\s*yes",
         r"^\*?\s*b:\s*no",
-        r"^feedback",
         r"^remember our full academic honesty policy",
     ]
 
@@ -321,7 +328,6 @@ def lines_to_questions(text: str) -> List[str]:
         if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
             continue
 
-        # detect start of question prompt
         if (
             re.search(r"\?$", s)
             or s.lower().startswith("did you thoughtfully")
@@ -337,9 +343,7 @@ def lines_to_questions(text: str) -> List[str]:
     if buffer:
         cleaned.append(" ".join(buffer).strip())
 
-    # final sanity filter
     cleaned = [q for q in cleaned if len(q) > 10 and re.search(r"[A-Za-z]", q)]
-
     return cleaned
 
 
