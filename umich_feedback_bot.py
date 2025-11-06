@@ -474,10 +474,15 @@ if over_limit(topics_toc):
     problems.append("List of topics (ToC) exceeds 8 000 characters.")
 
 for i, data in enumerate(assignments_data, start=1):
-    if over_limit(data["assignment_text"]):
-        problems.append(f"Assignment {i} text exceeds 8 000 characters.")
-    if not data["assignment_text"]:
-        problems.append(f"Assignment {i} is empty.")
+    instr = data.get("assignment_instructions", "")
+    quiz = data.get("quiz_questions", [])
+    if over_limit(instr):
+        problems.append(f"Assignment {i} instructions exceed 8 000 characters.")
+    if not instr:
+        problems.append(f"Assignment {i} instructions are empty.")
+    if not quiz:
+        problems.append(f"Assignment {i} has no quiz questions entered.")
+
 
 if problems:
     st.warning(" ".join(problems))
