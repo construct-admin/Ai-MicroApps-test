@@ -335,15 +335,6 @@ if uploaded and DOCX_MOD:
     file_bytes = uploaded.read()
     full_text, raw_headings = read_docx_bytes(file_bytes)
 
-    with st.expander("🔹 Extracted Headings (raw preview)", expanded=False):
-        if raw_headings:
-            st.success(f"Found {len(raw_headings)} heading(s).")
-            st.code("\n".join(raw_headings[:200]), language="text")
-        else:
-            st.warning(
-                "No styled headings detected. The model will infer topics from text."
-            )
-
     generate_toc = st.button(
         "Generate Structured Topics",
         use_container_width=True,
@@ -449,13 +440,27 @@ assignments_data = []
 
 for i in range(num_assignments):
     st.markdown(f"### 🧾 Assignment {i + 1}")
+
     instructions = st.text_area(
-        f"Paste the entire Assignment {i + 1} (Overview, Objectives, Instructions, Prompts, Submission info)",
-        key=f"assignment_{i}_text",
-        height=300,
-        placeholder="Paste everything from 'Overview' through 'Submitting the Assignment' here…",
+        f"Assignment {i + 1}: Instructions & Prompts",
+        key=f"assignment_{i}_instructions",
+        height=260,
+        placeholder="Paste the full assignment instructions (overview, objectives, submission details)…",
     )
-    assignments_data.append({"assignment_text": instructions.strip()})
+
+    quiz_questions = st.text_area(
+        f"Assignment {i + 1}: Quiz Questions (one per line)",
+        key=f"assignment_{i}_quiz",
+        height=200,
+        placeholder="Paste or type each quiz question here, one per line…",
+    )
+
+    assignments_data.append(
+        {
+            "assignment_instructions": instructions.strip(),
+            "quiz_questions": lines_to_questions(quiz_questions),
+        }
+    )
 
 st.divider()
 
@@ -509,122 +514,38 @@ if generate_all:
         all_results = []
 
         for idx, data in enumerate(assignments_data, start=1):
-            if not data["assignment_text"]:
+            instr = data.get("assignment_instructions", "").strip()
+            questions = data.get("quiz_questions", [])
+
+            if not instr or not questions:
                 continue
 
-            messages = [
-                {"role": "system", "content": SYSTEM_SCAFFOLD},
+            # Generate feedback per quiz question (using your helper)
+            feedback_blocks = generate_bulk_feedback(
+                course_objectives=course_objectives,
+                assignment_instructions_and_objectives=instr,
+                topics_list=topics_toc,
+                quiz_questions=questions,
+            )
+
+            formatted_output = []
+            for i, (q_text, fb) in enumerate(zip(questions, feedback_blocks), start=1):
+                # Clean spacing and ensure consistent CAI output
+                fb = fb.strip()
+                q_text = q_text.strip()
+
+                formatted_output.append(f"**{i}. {q_text}**\n\n{fb}\n\n---\n")
+
+            all_results.append(
                 {
-                    "role": "user",
-                    "content": f"""
-{_build_context_block(course_objectives, data["assignment_text"], topics_toc)}
-
-Generate a single, cohesive CAI-aligned feedback block that integrates insights from all parts or prompts of the assignment text above.
-Do not label or separate sections (e.g., no 'Prompt 1', 'Part I' headings). 
-Synthesize across all prompts into exactly two paragraphs following the required format.
-Each block must begin with '<b>Based on your answer</b>' followed by a blank line and then 'Your response should ...'.
-""",
-                },
-            ]
-
-            completion = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.4,
-                max_tokens=1200,
+                    "assignment": idx,
+                    "results": formatted_output,
+                }
             )
-            combined_feedback = completion.choices[0].message.content.strip()
-
-            # ── Enforce paragraph scaffolding & spacing ───────────────────────────
-            combined_feedback = combined_feedback.strip()
-
-            # Normalize "Based on your answer" line (always bold and standalone)
-            combined_feedback = re.sub(
-                r"(?is)^\s*(\*\*|__|<b>)?\s*based on your answer\s*(\*\*|__|</b>)?\s*[:\-–—,]*\s*",
-                "<b>Based on your answer</b>\n\n",
-                combined_feedback,
-                count=1,
-            )
-
-            # Ensure a clean line break before second-paragraph openers (e.g., Aim to, Be sure to, etc.)
-            second_para_variants = [
-                "Aim to",
-                "Be sure to",
-                "Also, consider",
-                "Additionally, make sure you",
-                "Strive to",
-                "Remember to",
-                "It can also help to",
-                "Consider expanding on",
-                "Reflect further on",
-                "In addition, explore",
-                "You might extend your reflection by",
-                "Another useful step is to",
-                "You could further elaborate on",
-                "It's worth emphasizing",
-                "A valuable next step would be to",
-                "Continue by examining",
-                "Next, you might explore",
-                "Take care to include",
-                "It's helpful to articulate",
-                "Lastly, you may highlight",
-            ]
-
-            # Force paragraph break before any of those openers if they appear mid-line
-            pattern = r"(?<!\n)\s*(?=(" + "|".join(second_para_variants) + r")\b)"
-            combined_feedback = re.sub(pattern, "\n\n", combined_feedback)
-
-            # Remove stray commas or punctuation that sometimes sneak in before the new paragraph
-            combined_feedback = re.sub(
-                r"\n[,\s]*(?=(" + "|".join(second_para_variants) + "))",
-                r"\n",
-                combined_feedback,
-            )
-
-            # Clean any markdown artifacts (like ** or __ not tied to <b>)
-            combined_feedback = re.sub(r"(?<!<b>)\*\*(?!</b>)", "", combined_feedback)
-            combined_feedback = re.sub(r"(?<!<b>)__(?!</b>)", "", combined_feedback)
-
-            # ── Replace *subsequent* "Your response should" occurrences with paragraph breaks ─────────────
-            matches = list(
-                re.finditer(r"(?is)\byour response should\b", combined_feedback)
-            )
-            if len(matches) > 1:
-                for m in reversed(matches[1:]):
-                    start, end = m.span()
-                    # Replace extra instances with a simple double newline to start a new paragraph
-                    combined_feedback = (
-                        combined_feedback[:start] + "\n\n" + combined_feedback[end:]
-                    )
-
-            # ── Final tidy spacing ─────────────────────────────────────────────────────────────
-            combined_feedback = re.sub(r"\r", "", combined_feedback)
-            combined_feedback = re.sub(r"\n{3,}", "\n\n", combined_feedback)
-            combined_feedback = re.sub(r"[ \t]+\n", "\n", combined_feedback)
-            combined_feedback = re.sub(r"\n[ \t]+", "\n", combined_feedback)
-
-            # ── Capitalize first word after each paragraph break ────────────────────────────────
-            # (Ensures e.g. "also consider" → "Also consider")
-            combined_feedback = re.sub(
-                r"(\n\n)([a-z])",
-                lambda m: m.group(1) + m.group(2).upper(),
-                combined_feedback,
-            )
-
-            # ── Final capitalization normalization ──────────────────────────────────────────────
-            # (Ensures the very first paragraph starts capitalized after the <b> header)
-            combined_feedback = re.sub(
-                r"(<b>Based on your answer</b>\s*\n\n)([a-z])",
-                lambda m: m.group(1) + m.group(2).upper(),
-                combined_feedback,
-                count=1,
-            )
-
-            # Append the cleaned result
-            all_results.append({"assignment": idx, "results": [combined_feedback]})
 
         # ✅ Save generated data to session_state to persist through reruns
         st.session_state["all_results"] = all_results
+
 
 # Render if results already exist (persists when toggling)
 if st.session_state.get("all_results"):
@@ -634,7 +555,7 @@ if st.session_state.get("all_results"):
 
     for block in st.session_state["all_results"]:
         st.markdown(f"## Assignment {block['assignment']}")
-        combined = block["results"][0] if block["results"] else ""
+        combined = "\n".join(block["results"])
 
         st.download_button(
             label=f"📥 Download Assignment {block['assignment']} Feedback (Markdown)",
@@ -647,7 +568,7 @@ if st.session_state.get("all_results"):
         with st.expander(
             f"View Feedback for Assignment {block['assignment']}", expanded=True
         ):
-            st.markdown(combined, unsafe_allow_html=True)  # <— allow <b> to render
+            st.markdown(combined, unsafe_allow_html=True)
             if st.toggle("View raw text", key=f"raw_{block['assignment']}"):
                 st.code(combined, language="markdown")
 
