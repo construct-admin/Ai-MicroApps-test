@@ -302,6 +302,7 @@ def lines_to_questions(text: str) -> List[str]:
     text = re.sub(
         r"(?is)<\s*feedback\s*>.*?(?=<\s*question\b|</\s*question\s*>|</\s*quiz\s*>|$)",
         "",
+        text,
     )
 
     # 3) Extract <question>...</question> blocks (case-insensitive)
