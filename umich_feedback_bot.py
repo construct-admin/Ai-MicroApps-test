@@ -285,53 +285,64 @@ def generate_bulk_feedback(
 
 def lines_to_questions(text: str) -> List[str]:
     """
-    Extracts meaningful quiz questions or prompts from pasted text.
-    Ignores structural labels (like <quiz_start>, Options:, Feedback, etc.).
+    Extract meaningful quiz questions or prompts from pasted text.
+    Cleans zero-width spaces and ignores boilerplate lines or XML-like tags.
     """
+    import unicodedata
+
+    # --- Normalize Unicode and whitespace ---
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)  # remove zero-width chars
+    text = re.sub(r"\s+\n", "\n", text)  # strip trailing spaces before newlines
+
     cleaned = []
     buffer = []
 
-    # Define what to ignore
+    # --- Lines to skip entirely ---
     ignore_patterns = [
         r"^instructions\b",
         r"^this is a graded quiz",
         r"^for full directions",
-        r"^quiz questions",
+        r"^quiz questions\b",
         r"^options[:\s]*$",
-        r"^<.*?>$",  # any XML-ish tags
-        r"^\*?A:\s*yes",
-        r"^\*?B:\s*no",
+        r"^<.*?>$",
+        r"^\*?\s*a:\s*yes",
+        r"^\*?\s*b:\s*no",
         r"^feedback",
         r"^remember our full academic honesty policy",
+        r"^overview$",
+        r"^objectives$",
     ]
 
-    for line in text.splitlines():
-        s = line.strip()
+    for raw_line in text.splitlines():
+        s = raw_line.strip()
         if not s:
             continue
 
-        # skip ignored lines
+        # skip boilerplate or tags
         if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
             continue
 
-        # group lines belonging to the same question
+        # Detect start of a question / prompt
         if (
             re.search(r"\?$", s)
             or s.lower().startswith("did you thoughtfully")
             or "prompt:" in s.lower()
         ):
-            # if buffer not empty, flush previous question
             if buffer:
                 cleaned.append(" ".join(buffer).strip())
                 buffer = []
             buffer.append(s)
         elif buffer:
-            # continuation line of current question
+            # continuation of same question
             buffer.append(s)
 
-    # flush last
+    # Flush last pending question
     if buffer:
         cleaned.append(" ".join(buffer).strip())
+
+    # Final sanity filter: keep only lines that contain at least one alphabetic char
+    cleaned = [q for q in cleaned if re.search(r"[A-Za-z]", q)]
 
     return cleaned
 
