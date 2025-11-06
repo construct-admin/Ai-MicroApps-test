@@ -691,6 +691,14 @@ if generate_all:
                 fb = re.sub(
                     r"(\n\n)([a-z])", lambda m: m.group(1) + m.group(2).upper(), fb
                 )
+
+                # ── Remove duplicate "Based on your answer" line if GPT already included one ────────
+                fb = re.sub(
+                    r"(?is)(<b>\s*based on your answer\s*</b>\s*\n+\s*)(based on your answer[,:\-\s]*)",
+                    r"\1",
+                    fb,
+                )
+
                 fb = re.sub(
                     r"(<b>Based on your answer</b>\s*\n\n)([a-z])",
                     lambda m: m.group(1) + m.group(2).upper(),
