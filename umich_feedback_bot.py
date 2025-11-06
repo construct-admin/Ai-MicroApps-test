@@ -284,7 +284,56 @@ def generate_bulk_feedback(
 
 
 def lines_to_questions(text: str) -> List[str]:
-    return [s.strip() for s in text.splitlines() if s.strip()]
+    """
+    Extracts meaningful quiz questions or prompts from pasted text.
+    Ignores structural labels (like <quiz_start>, Options:, Feedback, etc.).
+    """
+    cleaned = []
+    buffer = []
+
+    # Define what to ignore
+    ignore_patterns = [
+        r"^instructions\b",
+        r"^this is a graded quiz",
+        r"^for full directions",
+        r"^quiz questions",
+        r"^options[:\s]*$",
+        r"^<.*?>$",  # any XML-ish tags
+        r"^\*?A:\s*yes",
+        r"^\*?B:\s*no",
+        r"^feedback",
+        r"^remember our full academic honesty policy",
+    ]
+
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+
+        # skip ignored lines
+        if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
+            continue
+
+        # group lines belonging to the same question
+        if (
+            re.search(r"\?$", s)
+            or s.lower().startswith("did you thoughtfully")
+            or "prompt:" in s.lower()
+        ):
+            # if buffer not empty, flush previous question
+            if buffer:
+                cleaned.append(" ".join(buffer).strip())
+                buffer = []
+            buffer.append(s)
+        elif buffer:
+            # continuation line of current question
+            buffer.append(s)
+
+    # flush last
+    if buffer:
+        cleaned.append(" ".join(buffer).strip())
+
+    return cleaned
 
 
 def over_limit(s: str) -> bool:
@@ -454,6 +503,11 @@ for i in range(num_assignments):
         height=200,
         placeholder="Paste or type each quiz question here, one per line…",
     )
+
+    with st.expander(
+        f"🔍 Detected Quiz Questions for Assignment {i+1}", expanded=False
+    ):
+        st.write(quiz_questions)
 
     assignments_data.append(
         {
