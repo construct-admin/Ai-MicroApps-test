@@ -615,7 +615,7 @@ if generate_all:
             if not instr or not questions:
                 continue
 
-            # Generate feedback per quiz question (using your helper)
+            # Generate feedback per quiz question
             feedback_blocks = generate_bulk_feedback(
                 course_objectives=course_objectives,
                 assignment_instructions_and_objectives=instr,
@@ -625,24 +625,85 @@ if generate_all:
 
             formatted_output = []
             for i, (q_text, fb) in enumerate(zip(questions, feedback_blocks), start=1):
-                # Clean spacing and ensure consistent CAI output
                 fb = fb.strip()
                 q_text = q_text.strip()
 
-                formatted_output.append(
-                    f"{i}. {q_text}\n\n<b>Based on your answer</b>\n\n{fb}\n\n---\n"
+                # ── Enforce CAI header only if missing ──────────────────────────────
+                if not re.search(r"(?i)<b>\s*based on your answer", fb):
+                    fb = f"<b>Based on your answer</b>\n\n{fb}"
+
+                # ── Enforce paragraph scaffolding & spacing ─────────────────────────
+                fb = re.sub(
+                    r"(?is)^\s*(\*\*|__|<b>)?\s*based on your answer\s*(\*\*|__|</b>)?\s*[:\-–—,]*\s*",
+                    "<b>Based on your answer</b>\n\n",
+                    fb,
+                    count=1,
                 )
 
-            all_results.append(
-                {
-                    "assignment": idx,
-                    "results": formatted_output,
-                }
-            )
+                second_para_variants = [
+                    "Aim to",
+                    "Be sure to",
+                    "Also, consider",
+                    "Additionally, make sure you",
+                    "Strive to",
+                    "Remember to",
+                    "It can also help to",
+                    "Consider expanding on",
+                    "Reflect further on",
+                    "In addition, explore",
+                    "You might extend your reflection by",
+                    "Another useful step is to",
+                    "You could further elaborate on",
+                    "It's worth emphasizing",
+                    "A valuable next step would be to",
+                    "Continue by examining",
+                    "Next, you might explore",
+                    "Take care to include",
+                    "It's helpful to articulate",
+                    "Lastly, you may highlight",
+                ]
 
-        # ✅ Save generated data to session_state to persist through reruns
+                # Force paragraph break before these openers
+                pattern = r"(?<!\n)\s*(?=(" + "|".join(second_para_variants) + r")\b)"
+                fb = re.sub(pattern, "\n\n", fb)
+                fb = re.sub(
+                    r"\n[,\s]*(?=(" + "|".join(second_para_variants) + "))", r"\n", fb
+                )
+
+                # Clean markdown artifacts
+                fb = re.sub(r"(?<!<b>)\*\*(?!</b>)", "", fb)
+                fb = re.sub(r"(?<!<b>)__(?!</b>)", "", fb)
+
+                # Replace *extra* "Your response should" with new paragraphs
+                matches = list(re.finditer(r"(?is)\byour response should\b", fb))
+                if len(matches) > 1:
+                    for m in reversed(matches[1:]):
+                        start, end = m.span()
+                        fb = fb[:start] + "\n\n" + fb[end:]
+
+                # Final tidy spacing
+                fb = re.sub(r"\r", "", fb)
+                fb = re.sub(r"\n{3,}", "\n\n", fb)
+                fb = re.sub(r"[ \t]+\n", "\n", fb)
+                fb = re.sub(r"\n[ \t]+", "\n", fb)
+
+                # Capitalize first letter after paragraph breaks
+                fb = re.sub(
+                    r"(\n\n)([a-z])", lambda m: m.group(1) + m.group(2).upper(), fb
+                )
+                fb = re.sub(
+                    r"(<b>Based on your answer</b>\s*\n\n)([a-z])",
+                    lambda m: m.group(1) + m.group(2).upper(),
+                    fb,
+                    count=1,
+                )
+
+                formatted_output.append(f"{i}. {q_text}\n\n{fb}\n\n---\n")
+
+            all_results.append({"assignment": idx, "results": formatted_output})
+
+        # ✅ Persist across reruns
         st.session_state["all_results"] = all_results
-
 
 # Render if results already exist (persists when toggling)
 if st.session_state.get("all_results"):
