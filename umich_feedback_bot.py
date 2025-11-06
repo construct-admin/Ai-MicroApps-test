@@ -285,33 +285,39 @@ def generate_bulk_feedback(
 
 def lines_to_questions(text: str) -> List[str]:
     """
-    Extract meaningful quiz questions or prompts from pasted text.
-    Cleans zero-width spaces and ignores boilerplate lines or XML-like tags.
+    Extracts meaningful quiz questions or prompts from pasted text.
+    Cleans hidden Unicode and removes <Feedback> blocks or structural tags.
     """
     import unicodedata
 
-    # --- Normalize Unicode and whitespace ---
+    # --- Normalize and clean Unicode ---
     text = unicodedata.normalize("NFKC", text)
-    text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)  # remove zero-width chars
-    text = re.sub(r"\s+\n", "\n", text)  # strip trailing spaces before newlines
+    text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)  # remove zero-width spaces
+
+    # --- Remove <Feedback> sections entirely (they're causing GPT confusion) ---
+    text = re.sub(
+        r"<Feedback>.*?(?=<\/question>|<\/quiz>|$)",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # --- Strip all other XML-like tags except actual question text ---
+    text = re.sub(r"<[^>]+>", "", text)
 
     cleaned = []
     buffer = []
 
-    # --- Lines to skip entirely ---
+    # Lines to ignore outright
     ignore_patterns = [
         r"^instructions\b",
         r"^this is a graded quiz",
         r"^for full directions",
-        r"^quiz questions\b",
+        r"^quiz questions",
         r"^options[:\s]*$",
-        r"^<.*?>$",
         r"^\*?\s*a:\s*yes",
         r"^\*?\s*b:\s*no",
-        r"^feedback",
         r"^remember our full academic honesty policy",
-        r"^overview$",
-        r"^objectives$",
     ]
 
     for raw_line in text.splitlines():
@@ -319,11 +325,10 @@ def lines_to_questions(text: str) -> List[str]:
         if not s:
             continue
 
-        # skip boilerplate or tags
         if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
             continue
 
-        # Detect start of a question / prompt
+        # Detect start of question
         if (
             re.search(r"\?$", s)
             or s.lower().startswith("did you thoughtfully")
@@ -334,15 +339,13 @@ def lines_to_questions(text: str) -> List[str]:
                 buffer = []
             buffer.append(s)
         elif buffer:
-            # continuation of same question
             buffer.append(s)
 
-    # Flush last pending question
     if buffer:
         cleaned.append(" ".join(buffer).strip())
 
-    # Final sanity filter: keep only lines that contain at least one alphabetic char
-    cleaned = [q for q in cleaned if re.search(r"[A-Za-z]", q)]
+    # Sanity filter: drop any line shorter than 10 chars or without letters
+    cleaned = [q for q in cleaned if len(q) > 10 and re.search(r"[A-Za-z]", q)]
 
     return cleaned
 
