@@ -285,66 +285,88 @@ def generate_bulk_feedback(
 
 def lines_to_questions(text: str) -> List[str]:
     """
-    Extracts meaningful quiz questions or prompts from pasted text.
-    Handles single-line CLD pastes and strips <Feedback> text completely.
+    Parse CLD 'Quiz Questions' pasted as one long, taggy line.
+    - Removes <Feedback> blurbs
+    - Extracts <question>...</question> blocks (or falls back if no tags)
+    - Keeps only the actual human prompt (e.g., 'Did you thoughtfully...')
+    - Works even when there are no newlines in the paste
     """
     import unicodedata
 
-    # Normalize Unicode and remove zero-width spaces
-    text = unicodedata.normalize("NFKC", text)
+    # 1) Normalize & strip hidden chars
+    text = unicodedata.normalize("NFKC", text or "")
     text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)
 
-    # --- Remove <Feedback> blocks (they have no closing tags) ---
+    # 2) Remove <Feedback> paragraphs (unclosed; inline)
+    # Remove EVERY <Feedback> up to the next <question>, </question>, </quiz> or end
     text = re.sub(
-        r"<Feedback>.*?(?=<question>|</question>|</quiz>|$)",
+        r"(?is)<\s*feedback\s*>.*?(?=<\s*question\b|</\s*question\s*>|</\s*quiz\s*>|$)",
         "",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
     )
 
-    # --- Force newlines around XML-ish tags ---
-    text = re.sub(r"(</?[^>]+>)", r"\n\1\n", text)
-    text = re.sub(r"\s*\n\s*", "\n", text)
+    # 3) Extract <question>...</question> blocks (case-insensitive)
+    blocks = re.findall(r"(?is)<\s*question\b[^>]*>(.*?)</\s*question\s*>", text)
 
-    cleaned = []
-    buffer = []
+    # Fallback: if there are no explicit <question> blocks, run on whole text
+    if not blocks:
+        blocks = [text]
 
-    ignore_patterns = [
-        r"^instructions\b",
-        r"^this is a graded quiz",
-        r"^for full directions",
-        r"^quiz questions",
-        r"^options[:\s]*$",
-        r"^\*?\s*a:\s*yes",
-        r"^\*?\s*b:\s*no",
-        r"^remember our full academic honesty policy",
-    ]
+    extracted: List[str] = []
 
-    for raw_line in text.splitlines():
-        s = raw_line.strip()
-        if not s:
+    for raw in blocks:
+        # Strip all tags (keep plain text)
+        clean = re.sub(r"(?is)</?[^>]+>", " ", raw)
+        clean = re.sub(r"\s+", " ", clean).strip()
+
+        if not clean:
             continue
 
-        if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
+        # Cut anything after 'Options:' (we only want the prompt)
+        clean = re.split(r"(?is)\bOptions\s*:", clean, maxsplit=1)[0].strip()
+
+        # Heuristic 1: look for the canonical “Did you thoughtfully …” opener
+        m = re.search(r"(?is)(did you thoughtfully.*?)(?:$)", clean)
+        if m:
+            q = m.group(1).strip()
+            # If there is a trailing sentence beginning with 'Identify/Explain/Describe/Support' etc, keep it.
+            # This captures patterns like "... prompt: <follow-up sentence>"
+            # Already included by the greedy '.*?' above, but we also cut any trailing rubric fragments:
+            q = re.sub(r"\s*(A:\s*Yes|B:\s*No)\s*$", "", q, flags=re.IGNORECASE).strip()
+            extracted.append(q)
             continue
 
-        if (
-            re.search(r"\?$", s)
-            or s.lower().startswith("did you thoughtfully")
-            or "prompt:" in s.lower()
-        ):
-            if buffer:
-                cleaned.append(" ".join(buffer).strip())
-                buffer = []
-            buffer.append(s)
-        elif buffer:
-            buffer.append(s)
+        # Heuristic 2: grab the first sentence ending in '?' as the question
+        m2 = re.search(r"([^?]{5,}\?)", clean)
+        if m2:
+            extracted.append(m2.group(1).strip())
+            continue
 
-    if buffer:
-        cleaned.append(" ".join(buffer).strip())
+        # Heuristic 3: look for '<something> prompt:' and keep that line+continuation until a rubric keyword
+        m3 = re.search(
+            r"(?is)([A-Z].{0,120}prompt:\s*.*?)(?:A:\s*Yes|B:\s*No|$)", clean
+        )
+        if m3:
+            extracted.append(re.sub(r"\s+", " ", m3.group(1)).strip())
+            continue
 
-    cleaned = [q for q in cleaned if len(q) > 10 and re.search(r"[A-Za-z]", q)]
-    return cleaned
+        # Last resort: if nothing matched, keep a short, readable slice (but only if it looks like natural text)
+        snippet = re.sub(r"\s+", " ", clean).strip()
+        if len(snippet) >= 20 and re.search(r"[A-Za-z]", snippet):
+            extracted.append(snippet)
+
+    # Final tidy: de-dup, drop junky short items
+    deduped = []
+    seen = set()
+    for q in extracted:
+        q = q.strip(" .")
+        if len(q) < 15:
+            continue
+        key = q.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(q)
+
+    return deduped
 
 
 def over_limit(s: str) -> bool:
@@ -518,7 +540,7 @@ for i in range(num_assignments):
     with st.expander(
         f"🔍 Detected Quiz Questions for Assignment {i+1}", expanded=False
     ):
-        st.write(quiz_questions)
+        st.write(lines_to_questions(quiz_questions))
 
     assignments_data.append(
         {
@@ -526,6 +548,7 @@ for i in range(num_assignments):
             "quiz_questions": lines_to_questions(quiz_questions),
         }
     )
+
 
 st.divider()
 
@@ -541,6 +564,7 @@ if over_limit(topics_toc):
 for i, data in enumerate(assignments_data, start=1):
     instr = data.get("assignment_instructions", "")
     quiz = data.get("quiz_questions", [])
+
     if over_limit(instr):
         problems.append(f"Assignment {i} instructions exceed 8 000 characters.")
     if not instr:
