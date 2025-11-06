@@ -286,29 +286,21 @@ def generate_bulk_feedback(
 def lines_to_questions(text: str) -> List[str]:
     """
     Extracts meaningful quiz questions or prompts from pasted text.
-    Cleans hidden Unicode and removes <Feedback> blocks or structural tags.
+    Works even if the quiz markup is pasted as one long line.
     """
     import unicodedata
 
-    # --- Normalize and clean Unicode ---
     text = unicodedata.normalize("NFKC", text)
-    text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)  # remove zero-width spaces
+    text = re.sub(r"[\u200B-\u200F\uFEFF]", "", text)
 
-    # --- Remove <Feedback> sections entirely (they're causing GPT confusion) ---
-    text = re.sub(
-        r"<Feedback>.*?(?=<\/question>|<\/quiz>|$)",
-        "",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
+    # --- Force newlines around XML-ish tags so we can split safely ---
+    text = re.sub(r"(</?[^>]+>)", r"\n\1\n", text)
+    text = re.sub(r"\s*\n\s*", "\n", text)
 
-    # --- Strip all other XML-like tags except actual question text ---
-    text = re.sub(r"<[^>]+>", "", text)
-
+    # --- Now split into lines and clean ---
     cleaned = []
     buffer = []
 
-    # Lines to ignore outright
     ignore_patterns = [
         r"^instructions\b",
         r"^this is a graded quiz",
@@ -317,6 +309,7 @@ def lines_to_questions(text: str) -> List[str]:
         r"^options[:\s]*$",
         r"^\*?\s*a:\s*yes",
         r"^\*?\s*b:\s*no",
+        r"^feedback",
         r"^remember our full academic honesty policy",
     ]
 
@@ -328,7 +321,7 @@ def lines_to_questions(text: str) -> List[str]:
         if any(re.match(pat, s, re.IGNORECASE) for pat in ignore_patterns):
             continue
 
-        # Detect start of question
+        # detect start of question prompt
         if (
             re.search(r"\?$", s)
             or s.lower().startswith("did you thoughtfully")
@@ -344,7 +337,7 @@ def lines_to_questions(text: str) -> List[str]:
     if buffer:
         cleaned.append(" ".join(buffer).strip())
 
-    # Sanity filter: drop any line shorter than 10 chars or without letters
+    # final sanity filter
     cleaned = [q for q in cleaned if len(q) > 10 and re.search(r"[A-Za-z]", q)]
 
     return cleaned
