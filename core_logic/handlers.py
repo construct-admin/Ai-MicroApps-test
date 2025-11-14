@@ -26,6 +26,25 @@ Key additions:
 # ------------------------------------------------------------------------------
 import os
 
+# ------------------------------------------------------------------------------
+# Imports
+# ------------------------------------------------------------------------------
+import time
+import random
+from openai import OpenAI
+import streamlit as st
+
+st.warning("Proxy env vars at import time:")
+for key in [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+]:
+    st.write(f"{key} = {os.getenv(key)}")
+
 for key in (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -35,14 +54,6 @@ for key in (
     "all_proxy",
 ):
     os.environ.pop(key, None)
-
-# ------------------------------------------------------------------------------
-# Imports
-# ------------------------------------------------------------------------------
-import time
-import random
-from openai import OpenAI
-import streamlit as st
 
 
 # ------------------------------------------------------------------------------
