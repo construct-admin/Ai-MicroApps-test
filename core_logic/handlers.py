@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-11
+# Refactor date: 2025-11-14
 # Refactored by: Imaad Fakier
 # Purpose: Align Discussion Generator micro-app with OES GenAI Streamlit standards.
 # ------------------------------------------------------------------------------
@@ -19,7 +19,7 @@ Key additions:
 
 import time
 import random
-import openai
+from openai import OpenAI
 import streamlit as st
 
 
@@ -47,6 +47,9 @@ def with_backoff(fn, *args, **kwargs):
 # ------------------------------------------------------------------------------
 # Handler implementations
 # ------------------------------------------------------------------------------
+client = OpenAI()  # <-- NEW SDK client
+
+
 def handle_openai(context):
     """
     Core OpenAI handler used by most micro-apps.
@@ -71,7 +74,7 @@ def handle_openai(context):
 
     try:
         response = with_backoff(
-            openai.chat.completions.create,
+            client.chat.completions.create,  # <-- updated API call
             model=model,
             messages=messages,
             temperature=temperature,
@@ -82,6 +85,7 @@ def handle_openai(context):
         )
 
         text = response.choices[0].message.content.strip()
+
         usage = getattr(response, "usage", None)
         input_toks = getattr(usage, "prompt_tokens", 0)
         output_toks = getattr(usage, "completion_tokens", 0)
@@ -91,6 +95,7 @@ def handle_openai(context):
         execution_price = (
             (input_toks * price_in) + (output_toks * price_out)
         ) / 1_000_000.0
+
         return text, execution_price
 
     except Exception as e:
