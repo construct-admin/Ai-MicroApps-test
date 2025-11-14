@@ -49,25 +49,29 @@ def with_backoff(fn, *args, **kwargs):
 # ------------------------------------------------------------------------------
 # Handler implementations
 # ------------------------------------------------------------------------------
-# Remove proxy environment variables (safety)
-for var in [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "OPENAI_PROXY",
-    "OPENAI_HTTP_PROXY",
-]:
-    if var in os.environ:
-        del os.environ[var]
+def get_openai_client():
+    import httpx
+    import os
+    from openai import OpenAI
 
-# Force a clean HTTP client that does NOT take proxies from environment
-http_client = httpx.Client(
-    proxies=None,  # <-- forces no proxies
-    follow_redirects=True,
-    timeout=60,
-)
+    # Strip proxy env vars (safe)
+    for var in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "OPENAI_PROXY",
+        "OPENAI_HTTP_PROXY",
+    ]:
+        os.environ.pop(var, None)
 
-client = OpenAI(http_client=http_client)  # <-- NEW SDK client
+    # Create clean http client
+    http_client = httpx.Client(
+        proxies=None,
+        follow_redirects=True,
+        timeout=60,
+    )
+
+    return OpenAI(http_client=http_client)
 
 
 def handle_openai(context):
@@ -76,6 +80,7 @@ def handle_openai(context):
     Supports image inputs for GPT-4o family models.
     Returns (response_text, execution_price).
     """
+    client = get_openai_client()  # <-- initialize lazily & safely
     model = context["model"]
     temperature = context["temperature"]
     max_tokens = context["max_tokens"]
