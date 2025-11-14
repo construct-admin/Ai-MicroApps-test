@@ -3,6 +3,7 @@
 **Last Updated:** 2025-11-13
 
 **Maintained by:** **Imaad Fakier — Senior GenAI Developer, OES**
+
 _Technical ownership, refactoring, architectural direction, and ongoing maintenance are solely managed by Imaad Fakier.
 Domain‑level instructional input is informed by Learning Design stakeholders (primarily via Christo Visser)._
 
