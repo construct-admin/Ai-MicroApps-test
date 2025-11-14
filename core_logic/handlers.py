@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-14
+# Refactor date: 2025-11-11
 # Refactored by: Imaad Fakier
 # Purpose: Align Discussion Generator micro-app with OES GenAI Streamlit standards.
 # ------------------------------------------------------------------------------
@@ -17,11 +17,9 @@ Key additions:
 - Defensive error handling to prevent crashes from API exceptions.
 """
 
-import os
 import time
 import random
-import httpx
-from openai import OpenAI
+import openai
 import streamlit as st
 
 
@@ -49,38 +47,12 @@ def with_backoff(fn, *args, **kwargs):
 # ------------------------------------------------------------------------------
 # Handler implementations
 # ------------------------------------------------------------------------------
-def get_openai_client():
-    import httpx
-    import os
-    from openai import OpenAI
-
-    # Strip proxy env vars (safe)
-    for var in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "OPENAI_PROXY",
-        "OPENAI_HTTP_PROXY",
-    ]:
-        os.environ.pop(var, None)
-
-    # Create clean http client
-    http_client = httpx.Client(
-        proxies=None,
-        follow_redirects=True,
-        timeout=60,
-    )
-
-    return OpenAI(http_client=http_client)
-
-
 def handle_openai(context):
     """
     Core OpenAI handler used by most micro-apps.
     Supports image inputs for GPT-4o family models.
     Returns (response_text, execution_price).
     """
-    client = get_openai_client()  # <-- initialize lazily & safely
     model = context["model"]
     temperature = context["temperature"]
     max_tokens = context["max_tokens"]
@@ -99,7 +71,7 @@ def handle_openai(context):
 
     try:
         response = with_backoff(
-            client.chat.completions.create,  # <-- updated API call
+            openai.chat.completions.create,
             model=model,
             messages=messages,
             temperature=temperature,
@@ -110,7 +82,6 @@ def handle_openai(context):
         )
 
         text = response.choices[0].message.content.strip()
-
         usage = getattr(response, "usage", None)
         input_toks = getattr(usage, "prompt_tokens", 0)
         output_toks = getattr(usage, "completion_tokens", 0)
@@ -120,7 +91,6 @@ def handle_openai(context):
         execution_price = (
             (input_toks * price_in) + (output_toks * price_out)
         ) / 1_000_000.0
-
         return text, execution_price
 
     except Exception as e:
