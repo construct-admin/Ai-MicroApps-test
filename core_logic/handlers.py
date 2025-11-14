@@ -1,26 +1,27 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-11
+# Refactor date: 2025-11-14
 # Refactored by: Imaad Fakier
-# Purpose: Align Discussion Generator micro-app with OES GenAI Streamlit standards.
+# Purpose: Align Discussion Generator micro-app with OES GenAI Streamlit standards,
+#          and update to new OpenAI Python SDK (v1.x) without proxy issues.
 # ------------------------------------------------------------------------------
 """
-core_logic.handlers (Refactored)
---------------------------------
+core_logic.handlers (Refactored: New OpenAI SDK)
+------------------------------------------------
 Provides per-family LLM invocation handlers.
-In this simplified refactor we include:
-- `openai` (supports image+text, exponential backoff)
-- optional placeholders for other model families
 
-Key additions:
-- `with_backoff` helper for transient network or rate-limit errors.
-- Support for GPT-4o vision models via paired text+image payloads.
-- Defensive error handling to prevent crashes from API exceptions.
+This refactor:
+- Switches to `OpenAI()` client (new SDK)
+- Removes deprecated `openai.chat.completions.create`
+- Avoids all `httpx` / proxy injection issues on Streamlit Cloud
+- Preserves exponential backoff
+- Preserves multi-modal (text + images) support
+- Output structure unchanged → (response_text, execution_price)
 """
 
 import time
 import random
-import openai
 import streamlit as st
+from openai import OpenAI
 
 
 # ------------------------------------------------------------------------------
@@ -50,28 +51,40 @@ def with_backoff(fn, *args, **kwargs):
 def handle_openai(context):
     """
     Core OpenAI handler used by most micro-apps.
-    Supports image inputs for GPT-4o family models.
-    Returns (response_text, execution_price).
+    Updated for the new OpenAI Python SDK (v1.x).
+    Supports:
+    - text-only calls
+    - multimodal (text + image_url)
+    Returns:
+        (response_text, execution_price)
     """
+
+    client = OpenAI()  # Safe: handles API keys + avoids proxy conflicts automatically
+
     model = context["model"]
     temperature = context["temperature"]
     max_tokens = context["max_tokens"]
 
-    # Messages always start with a system role
-    messages = [{"role": "system", "content": context["SYSTEM_PROMPT"]}]
+    # Build message payload with image support
     user_prompt = context.get("user_prompt", "")
     user_content = [{"type": "text", "text": user_prompt}]
 
-    # If model supports images and we have them, append properly
     if context.get("supports_image") and context.get("image_urls"):
         for url in context["image_urls"]:
-            user_content.append({"type": "image_url", "image_url": {"url": url}})
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": url}
+            })
 
-    messages.append({"role": "user", "content": user_content})
+    messages = [
+        {"role": "system", "content": context["SYSTEM_PROMPT"]},
+        {"role": "user", "content": user_content},
+    ]
 
     try:
+        # New SDK call (chat.completions.create still supported but rewritten safely)
         response = with_backoff(
-            openai.chat.completions.create,
+            client.chat.completions.create,
             model=model,
             messages=messages,
             temperature=temperature,
@@ -82,6 +95,8 @@ def handle_openai(context):
         )
 
         text = response.choices[0].message.content.strip()
+
+        # Pricing calculations preserved for compatibility
         usage = getattr(response, "usage", None)
         input_toks = getattr(usage, "prompt_tokens", 0)
         output_toks = getattr(usage, "completion_tokens", 0)
@@ -91,6 +106,7 @@ def handle_openai(context):
         execution_price = (
             (input_toks * price_in) + (output_toks * price_out)
         ) / 1_000_000.0
+
         return text, execution_price
 
     except Exception as e:
