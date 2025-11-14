@@ -1,45 +1,33 @@
-# =====================================================================
-# System Dependencies for Ai-MicroApps-test
-# ---------------------------------------------------------------------
-# Purpose:
-#   These are essential Debian/Ubuntu system libraries required for
-#   browser-based operations (e.g., Playwright, Chromium, Puppeteer)
-#   and GUI rendering in headless or Dockerized environments.
-#
-# Usage:
-#   apt-get update && apt-get install -y $(grep -vE "^\s*#" packages.txt)
-#
-# Maintainer:
-#   OES GenAI Team – Updated for cross-platform compatibility.
-# =====================================================================
+# System dependencies for ai-microapps-test
+# OES GenAI Team – Compatible with Streamlit Cloud
 
-# --- Core Browser Security & Networking ---
-libnss3            # Network Security Services (SSL, TLS, crypto)
-libnspr4           # Netscape Portable Runtime (required by libnss3)
+# Core Browser Security & Networking
+libnss3
+libnspr4
 
-# --- Accessibility / GUI Toolkit Support ---
-libatk1.0-0        # ATK accessibility toolkit
-libatk-bridge2.0-0 # ATK bridge for GNOME accessibility
+# Accessibility / GUI Toolkit Support
+libatk1.0-0
+libatk-bridge2.0-0
 
-# --- Graphics & Rendering ---
-libdrm2            # Direct Rendering Manager for GPU abstraction
-libxcomposite1     # Compositing extension for X11
-libxdamage1        # X11 damage extension (used by Chromium)
-libxfixes3         # X11 fix extension (windowing)
-libgbm1            # Graphics Buffer Management (headless rendering)
+# Graphics & Rendering
+libdrm2
+libxcomposite1
+libxdamage1
+libxfixes3
+libgbm1
 
-# --- Fonts & Layout ---
-libpango-1.0-0     # Text and font layout engine
-libxkbcommon0      # Keyboard handling support for X11/Wayland
+# Fonts & Layout
+libpango-1.0-0
+libxkbcommon0
 
-# --- Sound & Accessibility ---
-libasound2         # ALSA sound support
-libatspi2.0-0      # Assistive Technology Service Provider Interface
+# Sound & Accessibility
+libasound2
+libatspi2.0-0
 
-# --- GUI Runtime (GTK) ---
-libgtk-3-0         # GTK 3 UI toolkit for Chromium/Electron/Playwright
-libxrandr2         # X11 resize, rotate, reflect extension
+# GUI Runtime (GTK)
+libgtk-3-0
+libxrandr2
 
-# --- Core X11 Communication Libraries ---
-libx11-xcb1        # X11/XCB bridge
-libxcb1            # Core X protocol C binding
+# Core X11 Libraries
+libx11-xcb1
+libxcb1
