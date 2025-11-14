@@ -46,12 +46,6 @@ import streamlit as st
 
 
 # ------------------------------------------------------------------------------
-# Initialize shared OpenAI client
-# ------------------------------------------------------------------------------
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-
-
-# ------------------------------------------------------------------------------
 # Helper: retry wrapper
 # ------------------------------------------------------------------------------
 def with_backoff(fn, *args, **kwargs):
@@ -82,6 +76,11 @@ def handle_openai(context):
     Supports image inputs for GPT-4o family models.
     Returns (response_text, execution_price).
     """
+
+    # ------------------------------------------------------------------------------
+    # Initialize shared OpenAI client
+    # ------------------------------------------------------------------------------
+    _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
     model = context["model"]
     temperature = context["temperature"]
