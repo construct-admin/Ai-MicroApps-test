@@ -1,74 +1,231 @@
-<h1 align="center">AI MicroApps Template</h1>
+# 🧠 OES GenAI Micro‑Apps – Internal Development Sandbox
 
-<p align="center">
-  <a href="https://ai-microapps.streamlit.app">Gallery</a> &bull; <a href="https://jswope00.github.io/AI-MicroApps-Docs/">Documentation</a> &bull; <a href="https://www.youtube.com/@johnswope8421">YouTube</a>
-</p>
+**Last Updated:** 2025-11-13
 
-<p align="center">
-  AI Microapps are the simplest free way to build AI-powered web apps that you can personalize and share. 
-</p>
+**Maintained by:** **Imaad Fakier — Senior GenAI Developer, OES**
+_Technical ownership, refactoring, architectural direction, and ongoing maintenance are solely managed by Imaad Fakier.
+Domain‑level instructional input is informed by Learning Design stakeholders (primarily via Christo Visser)._
 
-<p>Let's explain with an ✨AI-powered✨ Haiku App</p>
+---
 
-<p>First, we configure about 10 lines to configure the app. Some lines configure two text fields to gather the users name and a favorite activity. The last line is the AI prompt that we'll send to AI with the user's input. It looks like this:</p>
+## 🚀 Purpose of This Repository
 
-![image](https://github.com/user-attachments/assets/12c0f1e5-819c-4d6e-8587-4d66c3ba5a8b)
+`Ai-MicroApps-test` is the **internal research, prototyping, and integration sandbox** for all GenAI‑powered educational micro‑applications used across OES.
 
-<p>Here is the app we get:</p>
+This environment acts as the **official pre‑production layer**, where GenAI micro‑apps are:
 
-![image](https://jswope00.github.io/AI-MicroApps-Docs/img/hello_world_app.gif)
+- Designed and architected
+- Refactored and standardized
+- Tested and validated
+- Documented and production‑aligned
+- Prepared for migration into `AI-MicroApps-main`
 
-<p>So what next?</p>
-<p>Once you've mastered the basics, you can start building customized apps for those long, complicated prompts that you always have trouble remembering exactly how you did them. <i>And</i> you can share your apps with others, allowing them to quickly and intuitively use an AI chain that you've developed. </p>
-<p>AI Microapps was built by an educator for the education sector. It works well as either:</p>
-   <ul>
-      <li><strong>A course accelerator</strong> - Build and share your customized <a href="https://mcq-wizard.streamlit.app" target="_blank" alt="Multiple Choice Question Generator">Multiple Choice Question generators</a>, Lesson Plan Builders, <a href="https://alt-text.streamlit.app" target="_blank">Alt Text Wizards</a> and more. </li>
-      <li><strong>Assessment &amp; Feedback Tools</strong> - You can create AI-powered exercises for your students like an <a href="https://ai-debate.streamlit.app" target="_blank">AI Debate</a> tool about this week's lesson, or a <a href="https://critical-thinking.streamlit.app" target="_blank">critical thinking practice app</a> that is guided by your instruction. </li>
-   </ul>
-<p>AI MicroApps have nearly limitless customization capabilities and work with the most popular AI models, so you can make nearly any app and share it with anyone</p>
+All major refactors in 2025 introduced unified architecture, updated UI/UX patterns, and consistent helper modules used across the entire OES GenAI ecosystem.
 
-<p>Apps can be deployed to the web via <a href="https://streamlit.io/" target="_blank" alt="Streamlit Hosting">Streamlit</a> for free and nearly instantly.</p>
+---
 
-<p>Happy Building!</p>
+## 📁 Clean Repository Structure (Development‑Relevant Files Only)
 
-## Demo Gallery
+The following structure excludes caches, `__pycache__`, environment folders, and other noise.
 
-[https://ai-microapps.streamlit.app](https://ai-microapps.streamlit.app)
+```text
+Ai-MicroApps-test/
+│
+├── api_uploader_split_project/                    # Fully refactored Canvas Import micro‑app
+│   ├── app.py
+│   ├── canvas_api.py
+│   ├── gdoc_utils.py
+│   ├── kb.py
+│   ├── module_tags.py
+│   ├── parsers.py
+│   ├── quizzes_classic.py
+│   ├── quizzes_new.py
+│   ├── requirements.txt
+│   └── utils.py
+│
+├── app_alt_text_construct.py
+├── app_construct_lo_generator.py
+├── app_discussion_generator.py
+├── app_image_latex.py
+├── app_image_text.py
+├── app_mg_script_gen.py
+├── app_ptc_video_script_gen.py
+├── app_quiz_question_gen.py
+├── app_scenario_video_script.py
+│
+├── canvas_import_secure.py
+├── canvas_import_simplified.py
+├── canvas_quiz_upload/
+│
+├── cld_topic_extractor.py
+├── config.py
+├── copy-paste-agent.py
+│
+├── core_logic/
+│   ├── data_storage.py
+│   ├── handlers.py
+│   ├── llm_config.py
+│   ├── main.py
+│   └── rag_pipeline.py
+│
+├── data_storage.py
+├── quiz_question_generator.py
+│
+├── rag_docs/                                     # Internal PDFs for RAG testing
+│
+├── shared_assets/                                # Additional PDFs / resources
+│
+├── app_images/                                   # Icons, UI images, preview assets
+│
+├── requirements.txt
+├── packages.txt
+├── LICENSE
+└── README.md
+```
 
-## Quickstart Video & Docs
+---
 
-Customize and deploy an app to the web in just a few minutes:
+## 🧩 Micro‑Applications Overview
 
-[Quickstart Docs](https://jswope00.github.io/AI-MicroApps-Docs/quickstart/)
+Each `app_*.py` file is an **independent Streamlit micro‑app**, following the OES‑standardized GenAI architecture.
 
-## Building Apps
+| Micro‑App                                  | Purpose                                                                                                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **api_uploader_split_project/app.py**      | Flagship DOCX → Canvas importer. Converts storyboards into Canvas pages, modules, discussions, assignments, and quizzes (Classic + New Quizzes). Includes full RAG KB + GDoc support. |
+| **app_alt_text_construct.py**              | Generates WCAG‑compliant alt‑text for images.                                                                                                                                         |
+| **app_quiz_question_gen.py**               | Generates structured quiz questions aligned with LOs.                                                                                                                                 |
+| **app_construct_lo_generator.py**          | Builds learning objectives from CLDs or raw text.                                                                                                                                     |
+| **app_mg_script_gen.py**                   | Creates micro‑learning instructional scripts.                                                                                                                                         |
+| **app_scenario_video_script.py**           | Generates scenario‑based instructional video scripts.                                                                                                                                 |
+| **app_ptc_video_script_gen.py**            | Creates Pre‑Tutorial Content scripts.                                                                                                                                                 |
+| **app_discussion_generator.py**            | Generates Canvas‑ready discussion prompts.                                                                                                                                            |
+| **app_image_text.py / app_image_latex.py** | Produces structured text or LaTeX from diagrams/images.                                                                                                                               |
+| **visual_transcripts.py**                  | Creates visual transcript summaries.                                                                                                                                                  |
+| **cld_topic_extractor.py**                 | Extracts topics/concepts from CLDs.                                                                                                                                                   |
+| **umich_feedback_bot.py**                  | Automated feedback generator (Umich pilot).                                                                                                                                           |
+| **copy-paste-agent.py**                    | Minimal prompt‑exploration sandbox.                                                                                                                                                   |
 
-Create your own apps from Github without installing anything (easier) or from your local computer. 
+---
 
-[Build from Github](https://jswope00.github.io/AI-MicroApps-Docs/build_online/)
+## 🧱 Shared Helper Modules (Refactored 2025)
 
-[Build from Local](https://jswope00.github.io/AI-MicroApps-Docs/build_local/)
+These modules form the backbone of all micro‑apps.
 
-## Deploying the Application
+### **Canvas API & Integrations**
 
-Deploy your app to the web, for free, via Streamlit:
+- `canvas_api.py` — Pages, Assignments, Discussions, Modules, Classic Quiz data
+- `quizzes_classic.py` — Classic Quiz endpoints
+- `quizzes_new.py` — Full LTI New Quizzes support (MCQ, MA, TF, SA, Essay, Numerical, Matching, FIMB)
 
-[Deploy an AI MicroApp](https://jswope00.github.io/AI-MicroApps-Docs/deploy/)
+### **Knowledge Base (RAG) / OpenAI Vector Stores**
 
-## Get Fancy
+- `kb.py`
 
-Build more powerful apps with conditional logic, additional fields, and phases for different scenarios.
+  - Vector store creation
+  - File uploads
+  - Backwards‑compatible OpenAI SDK support
 
-[AI MicroApp Phases, Fields, and Prompts](https://jswope00.github.io/AI-MicroApps-Docs/concept_phases_fields_runs/)
+### **Document Processing Utilities**
 
-[AI MicroApp Phases](https://jswope00.github.io/AI-MicroApps-Docs/reference_phases/)
+- `gdoc_utils.py` — GDoc export, heading extraction, anchor resolution
+- `parsers.py` — DOCX + text parsing (`<canvas_page>` blocks)
+- `module_tags.py` — Extract `<module_name>...</module>` structures
+- `utils.py` — Tag extraction helpers
 
-[AI MicroApp Fields](https://jswope00.github.io/AI-MicroApps-Docs/reference_fields/)
+These helpers now follow full docstring documentation, error handling consistency, and naming alignment.
 
-[AI MicroApp Prompts](https://jswope00.github.io/AI-MicroApps-Docs/reference_prompts/)
+---
 
-## Requirements
+## 🎨 UI/UX Standards (2025 OES GenAI Style)
 
-- Python 3.8+
-- Streamlit
-- AI API Keys (currently, OpenAI, Claude, Gemini, and Perplexity are supported. Want to request other? Submit an issue.)
+All micro‑apps adhere to:
+
+- **Sidebar‑first layout**
+- Consistent spacing, headings, and section grouping
+- Expanders for advanced configuration
+- Unified colors and iconography (via `app_images/`)
+- A predictable flow: **Input → Preview → Generate → Export / Upload**
+- Standardized SHA‑256 access‑code authentication for secure apps
+
+---
+
+## ⚙️ Installation & Local Setup
+
+```bash
+git clone <PRIVATE_REPO_URL>
+cd Ai-MicroApps-test
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+cp .env.sample .env
+# Add your secret keys
+```
+
+Run any micro‑app:
+
+```bash
+streamlit run api_uploader_split_project/app.py
+# or
+streamlit run app_quiz_question_gen.py
+```
+
+---
+
+## 🧠 Development Guidelines
+
+### **1. Micro‑App Independence**
+
+Each micro‑app must function in isolation.
+
+### **2. Shared Helper Modules Only**
+
+No repeated logic; always import from:
+`canvas_api.py`, `kb.py`, `utils.py`, etc.
+
+### **3. No Hardcoded Secrets**
+
+Everything goes into `.env` → accessed via `config.py`.
+
+### **4. UI/UX Consistency**
+
+New apps must follow the 2025 OES style.
+
+### **5. Testing**
+
+Local Streamlit testing before any internal deployment.
+
+### **6. Git Hygiene**
+
+Branches → PRs → Merges for all significant changes.
+
+---
+
+## 🧭 2025 Refactor Status
+
+| Category                      | Status         | Notes                                   |
+| ----------------------------- | -------------- | --------------------------------------- |
+| Helper Module Standardization | ✅ Complete    | Major refactor across all shared utils. |
+| Canvas Import App Overhaul    | ✅ Complete    | Production‑grade architecture & UX.     |
+| Requirements Pinning          | ✅ Complete    | Rewritten for deterministic builds.     |
+| UI/UX Standardization         | ⚙️ In Progress | Rolling out across all apps.            |
+| RAG / Snowflake Experiments   | 🚧 Active      | Research for future analytics apps.     |
+| Removal of Legacy Patterns    | 🔄 Ongoing     | Cleaning deprecated code.               |
+
+---
+
+## 📄 License
+
+This repository includes proprietary OES GenAI tooling.
+External distribution requires OES authorization.
+
+---
+
+## 💬 Maintainer Contact
+
+**Imaad Fakier** — Senior GenAI Developer, OES
+📧 _[ifakier@oes.com](mailto:ifakier@oes.com)_
+
+> _“Where GenAI prototypes evolve into production‑ready educational tools.”_

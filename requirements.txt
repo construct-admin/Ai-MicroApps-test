@@ -1,27 +1,92 @@
-streamlit>=1.33.0
-openai>=1.45.0
-python-dotenv>=1.0.1
-streamlit_extras
-st-gsheets-connection
-pandasql
-anthropic
-google-generativeai
-dnspython==2.6.1
-pymongo==4.8.0
+################################################################################
+# OES GenAI Micro-Apps – Requirements File
+# Maintained by: Imaad Fakier (Senior GenAI Developer)
+# 
+# Context: Shared dependency layer for all Streamlit-based GenAI apps
+# Compatible with Streamlit Community Cloud
+# 
+# IMPORTANT:
+# - These versions are pinned to avoid breakage on Streamlit Cloud + local venv.
+# - Do NOT unpin without testing. If you add a new lib, pin it.
+################################################################################
+
+# ------------------------------------------------------------------------------
+# CORE RUNTIME (UI + state)
+# ------------------------------------------------------------------------------
+streamlit==1.39.0                 # Stable with streamlit-extras
+streamlit-extras==0.4.2           # stylable_container, let_it_rain, etc.
+python-dotenv==1.0.1              # local dev .env loading
+pandas==2.2.2                     # works with numpy<2
+numpy==1.26.4                     # langchain requires <2.0.0
+Pillow==10.4.0                    # image handling for uploads/OCR
+requests==2.32.3                  # generic HTTP client
+
+# ------------------------------------------------------------------------------
+# MODEL CLIENTS / LLM CONNECTORS
+# ------------------------------------------------------------------------------
+openai==1.47.0                    # GPT-4o via chat.completions
+anthropic==0.35.0                 # Claude models (if used by feedback/scoring bots)
+google-generativeai==0.8.3        # Gemini / PaLM
+
+tiktoken==0.7.0                   # token counting & cost calc
+
+# ------------------------------------------------------------------------------
+# LANGCHAIN ECOSYSTEM
+# We pin ALL of these because they're version-sensitive.
+# LangChain wants:
+#   - numpy<2
+#   - tenacity!=8.4.0,<9
+#   - packaging<25
+# We'll satisfy those explicitly below.
+# ------------------------------------------------------------------------------
 langchain-core==0.2.38
 langchain-openai==0.1.23
 langchain-mongodb==0.1.8
-langchain==0.2.16
 langchain-community==0.2.16
-pypdf>=3.0.0
-SQLAlchemy
-pymupdf
-python-docx
-opencv-python-headless
-numpy
-requests
-pillow
-pytesseract
-pysrt
-pandas>=2.2
+langchain==0.2.16
+
+tenacity==8.5.0                   # <9, !=8.4.0 (LangChain constraint)
+packaging==24.2                   # <25.0 per LangChain constraint
+
+# ------------------------------------------------------------------------------
+# STORAGE / DATA / LOGGING
+# ------------------------------------------------------------------------------
+pymongo==4.8.0                    # Mongo client (umich_feedback_bot etc.)
+dnspython==2.6.1                  # required by pymongo for SRV URIs
+SQLAlchemy==2.0.36                # optional logging backend
+st-gsheets-connection==0.1.0      # lightweight GSheets logger
+pandasql==0.7.3                   # run SQL against pandas DataFrames
+
+# ------------------------------------------------------------------------------
+# FILE / DOC / PDF / TRANSCRIPT UTILITIES
+# ------------------------------------------------------------------------------
+pypdf==4.3.1                      # PDF parsing
+pymupdf==1.24.9                   # fast PDF image/text extraction
+python-docx==1.1.2                # .docx IO
+pysrt==1.1.2                      # .srt subtitle parsing (visual transcripts tool)
+pyperclip==1.9.0                  # clipboard access (used by copy-paste-agent fallback)
+
+# ------------------------------------------------------------------------------
+# VISION / OCR / MEDIA PROCESSING
+# NOTE: opencv-python-headless pulls in cv2 without GUI deps
+# ------------------------------------------------------------------------------
+opencv-python-headless==4.10.0.84
+pytesseract==0.3.13               # OCR
+# Pillow already pinned above
+
+# ------------------------------------------------------------------------------
+# GOOGLE / GENERATIVE AI / PROTOBUF COMPAT
+# google-generativeai transitively needs protobuf<6.0.0
+# ------------------------------------------------------------------------------
+protobuf==5.27.3                  # compatible with google-ai-generativelanguage libs
+
+# ------------------------------------------------------------------------------
+# PLAYWRIGHT (used for certain scraping / scenario gen helpers)
+# ------------------------------------------------------------------------------
 playwright==1.46.0
+
+# ------------------------------------------------------------------------------
+# DEV TOOLING (optional but encouraged locally; skip in prod build if needed)
+# ------------------------------------------------------------------------------
+black==24.4.2                     # code formatter
+flake8==7.0.0                     # style/lint
