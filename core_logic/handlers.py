@@ -1,59 +1,26 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-14
+# Refactor date: 2025-11-11
 # Refactored by: Imaad Fakier
-# Purpose: Align Alt Text / Discussion Generator micro-app with
-#          OES GenAI Streamlit standards + fix Streamlit proxy env issue.
+# Purpose: Align Discussion Generator micro-app with OES GenAI Streamlit standards.
 # ------------------------------------------------------------------------------
 """
 core_logic.handlers (Refactored)
 --------------------------------
 Provides per-family LLM invocation handlers.
-
-Includes:
+In this simplified refactor we include:
 - `openai` (supports image+text, exponential backoff)
-- Placeholders for future model families
+- optional placeholders for other model families
 
 Key additions:
-- Safe proxy scrubbing for Streamlit Cloud
-- Clean OpenAI v1 Client usage
-- Exponential backoff helper
-- Stable multimodal formatting for GPT-4o
-- Defensive error reporting for Streamlit
+- `with_backoff` helper for transient network or rate-limit errors.
+- Support for GPT-4o vision models via paired text+image payloads.
+- Defensive error handling to prevent crashes from API exceptions.
 """
 
-# ------------------------------------------------------------------------------
-# ❗ Critical: Remove proxy variables BEFORE importing OpenAI
-# ------------------------------------------------------------------------------
-import os
-
-# ------------------------------------------------------------------------------
-# Imports
-# ------------------------------------------------------------------------------
 import time
 import random
-from openai import OpenAI
+import openai
 import streamlit as st
-
-st.warning("Proxy env vars at import time:")
-for key in [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-]:
-    st.write(f"{key} = {os.getenv(key)}")
-
-for key in (
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-):
-    os.environ.pop(key, None)
 
 
 # ------------------------------------------------------------------------------
@@ -69,7 +36,6 @@ def with_backoff(fn, *args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            # final attempt → raise
             if attempt == 4:
                 raise
             wait = delay + random.random() * delay
@@ -79,7 +45,7 @@ def with_backoff(fn, *args, **kwargs):
 
 
 # ------------------------------------------------------------------------------
-# Handler: OpenAI
+# Handler implementations
 # ------------------------------------------------------------------------------
 def handle_openai(context):
     """
@@ -87,33 +53,25 @@ def handle_openai(context):
     Supports image inputs for GPT-4o family models.
     Returns (response_text, execution_price).
     """
-
-    # ------------------------------------------------------------------------------
-    # Initialize shared OpenAI client
-    # ------------------------------------------------------------------------------
-    _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-
     model = context["model"]
     temperature = context["temperature"]
     max_tokens = context["max_tokens"]
 
-    # ---- Build messages ------------------------------------------------------
+    # Messages always start with a system role
     messages = [{"role": "system", "content": context["SYSTEM_PROMPT"]}]
-
     user_prompt = context.get("user_prompt", "")
     user_content = [{"type": "text", "text": user_prompt}]
 
-    # Attach image URLs (multimodal)
+    # If model supports images and we have them, append properly
     if context.get("supports_image") and context.get("image_urls"):
         for url in context["image_urls"]:
             user_content.append({"type": "image_url", "image_url": {"url": url}})
 
     messages.append({"role": "user", "content": user_content})
 
-    # ---- Execute request with retry -----------------------------------------
     try:
         response = with_backoff(
-            _client.chat.completions.create,
+            openai.chat.completions.create,
             model=model,
             messages=messages,
             temperature=temperature,
@@ -124,22 +82,15 @@ def handle_openai(context):
         )
 
         text = response.choices[0].message.content.strip()
-
-        # Token usage + pricing
         usage = getattr(response, "usage", None)
-        input_toks = getattr(usage, "input_tokens", 0) or getattr(
-            usage, "prompt_tokens", 0
-        )
-        output_toks = getattr(usage, "output_tokens", 0) or getattr(
-            usage, "completion_tokens", 0
-        )
+        input_toks = getattr(usage, "prompt_tokens", 0)
+        output_toks = getattr(usage, "completion_tokens", 0)
 
         price_in = context.get("price_input_token_1M", 0)
         price_out = context.get("price_output_token_1M", 0)
         execution_price = (
             (input_toks * price_in) + (output_toks * price_out)
         ) / 1_000_000.0
-
         return text, execution_price
 
     except Exception as e:
