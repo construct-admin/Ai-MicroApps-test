@@ -1,92 +1,95 @@
 ################################################################################
-# OES GenAI Micro-Apps – Requirements File
+# OES GenAI Micro-Apps – Requirements File (Modern LangChain Ecosystem)
 # Maintained by: Imaad Fakier (Senior GenAI Developer)
 # 
-# Context: Shared dependency layer for all Streamlit-based GenAI apps
-# Compatible with Streamlit Community Cloud
-# 
+# CONTEXT:
+# - Shared dependency layer for the NEW generation of Streamlit-based GenAI apps.
+# - Compatible with LangChain 0.3+, OpenAI SDK v2+, MongoDB vector store.
+# - NOT compatible with legacy LangChain 0.1–0.2 apps.
+#
 # IMPORTANT:
-# - These versions are pinned to avoid breakage on Streamlit Cloud + local venv.
-# - Do NOT unpin without testing. If you add a new lib, pin it.
+# - These versions are pinned to avoid breakage in Streamlit Cloud + local venv.
+# - This stack uses the new LCEL architecture, new OpenAI v2 responses API,
+#   and updated vector store interfaces.
+# - Do NOT unpin anything without deliberate testing.
 ################################################################################
 
 # ------------------------------------------------------------------------------
 # CORE RUNTIME (UI + state)
 # ------------------------------------------------------------------------------
-streamlit==1.39.0                 # Stable with streamlit-extras
-streamlit-extras==0.4.2           # stylable_container, let_it_rain, etc.
-python-dotenv==1.0.1              # local dev .env loading
-pandas==2.2.2                     # works with numpy<2
-numpy==1.26.4                     # langchain requires <2.0.0
-Pillow==10.4.0                    # image handling for uploads/OCR
-requests==2.32.3                  # generic HTTP client
+streamlit==1.39.0                 # Stable + Cloud-compatible
+streamlit-extras==0.4.2           # stylable_container, let_it_rain, keyboard, etc.
+python-dotenv==1.0.1              # secure local .env loading
+
+pandas==2.2.2                     # safe & modern; aligns with numpy<2 constraint
+numpy==1.26.4                     # many AI libs still require <2.0 (safe choice)
+Pillow==10.4.0                    # robust for image uploads & OCR preprocessing
+requests==2.32.3                  # stable HTTP backbone
 
 # ------------------------------------------------------------------------------
-# MODEL CLIENTS / LLM CONNECTORS
+# MODEL CLIENTS / LLM CONNECTORS (NEW-VERSION CLIENTS)
 # ------------------------------------------------------------------------------
-openai==1.47.0                    # GPT-4o via chat.completions
-anthropic==0.35.0                 # Claude models (if used by feedback/scoring bots)
-google-generativeai==0.8.3        # Gemini / PaLM
+openai==1.52.0                    # OpenAI SDK v2+ (responses API, embeddings API)
+anthropic==0.35.0                 # Claude 3.x support
+google-generativeai==0.8.3        # Gemini models
 
-tiktoken==0.7.0                   # token counting & cost calc
+tiktoken==0.7.0                   # token counting, embedding dimensionality utils
 
 # ------------------------------------------------------------------------------
-# LANGCHAIN ECOSYSTEM
-# We pin ALL of these because they're version-sensitive.
-# LangChain wants:
-#   - numpy<2
-#   - tenacity!=8.4.0,<9
-#   - packaging<25
-# We'll satisfy those explicitly below.
+# LANGCHAIN ECOSYSTEM (MODERN 0.3+ GENERATION)
+#
+# NOTE:
+# - LangChain 0.3+ introduces the LCEL architecture (Runnable interfaces),
+#   new Chat/Embedding clients, modern tool-calling, and stricter dependency rules.
+# - All LC packages must remain aligned on 0.3.x to prevent API mismatches.
 # ------------------------------------------------------------------------------
-langchain-core==0.2.38
-langchain-openai==0.1.23
-langchain-mongodb==0.1.8
-langchain-community==0.2.16
-langchain==0.2.16
+langchain==0.3.27                 # Main LangChain package (LCEL-first)
+langchain-core==0.3.79            # Core runtime & Runnable engine
+langchain-community==0.3.11       # Tools, loaders, retrievers, templates
+langchain-text-splitters==0.3.11  # Updated splitters for LC 0.3+
+langchain-openai==0.2.1           # OpenAI v2-compatible LC integration
+langchain-mongodb==0.7.2          # Modern Atlas Vector Search store
 
-tenacity==8.5.0                   # <9, !=8.4.0 (LangChain constraint)
-packaging==24.2                   # <25.0 per LangChain constraint
+langsmith==0.4.42                 # Telemetry + tracing; required by LC 0.3
 
 # ------------------------------------------------------------------------------
 # STORAGE / DATA / LOGGING
 # ------------------------------------------------------------------------------
-pymongo==4.8.0                    # Mongo client (umich_feedback_bot etc.)
-dnspython==2.6.1                  # required by pymongo for SRV URIs
-SQLAlchemy==2.0.36                # optional logging backend
-st-gsheets-connection==0.1.0      # lightweight GSheets logger
-pandasql==0.7.3                   # run SQL against pandas DataFrames
+pymongo==4.8.0                    # MongoDB driver (native + LC vector store backend)
+dnspython==2.6.1                  # SRV DNS support for Atlas URIs
+
+SQLAlchemy==2.0.36                # optional backend for app logging/meta
+st-gsheets-connection==0.1.0      # lightweight logging into Google Sheets
+pandasql==0.7.3                   # SQL queries over DataFrames
 
 # ------------------------------------------------------------------------------
 # FILE / DOC / PDF / TRANSCRIPT UTILITIES
 # ------------------------------------------------------------------------------
-pypdf==4.3.1                      # PDF parsing
-pymupdf==1.24.9                   # fast PDF image/text extraction
-python-docx==1.1.2                # .docx IO
-pysrt==1.1.2                      # .srt subtitle parsing (visual transcripts tool)
-pyperclip==1.9.0                  # clipboard access (used by copy-paste-agent fallback)
+pypdf==4.3.1                      # baseline PDF parsing
+pymupdf==1.24.9                   # high-performance PDF/image extraction
+python-docx==1.1.2                # .docx read/write
+pysrt==1.1.2                      # SRT subtitle parsing for transcript tools
+pyperclip==1.9.0                  # clipboard support (copy-to-clipboard UX)
 
 # ------------------------------------------------------------------------------
 # VISION / OCR / MEDIA PROCESSING
-# NOTE: opencv-python-headless pulls in cv2 without GUI deps
 # ------------------------------------------------------------------------------
-opencv-python-headless==4.10.0.84
-pytesseract==0.3.13               # OCR
-# Pillow already pinned above
+opencv-python-headless==4.10.0.84 # cv2 without GUI dependencies
+pytesseract==0.3.13               # OCR engine wrapper
 
 # ------------------------------------------------------------------------------
 # GOOGLE / GENERATIVE AI / PROTOBUF COMPAT
-# google-generativeai transitively needs protobuf<6.0.0
+# google-generativeai requires protobuf<6.0.0
 # ------------------------------------------------------------------------------
-protobuf==5.27.3                  # compatible with google-ai-generativelanguage libs
+protobuf==5.27.3                  # correct boundary for Google APIs
 
 # ------------------------------------------------------------------------------
-# PLAYWRIGHT (used for certain scraping / scenario gen helpers)
+# PLAYWRIGHT (used for certain scraping / scenario generation helpers)
 # ------------------------------------------------------------------------------
 playwright==1.46.0
 
 # ------------------------------------------------------------------------------
-# DEV TOOLING (optional but encouraged locally; skip in prod build if needed)
+# DEV TOOLING (optional locally; excluded in production builds if desired)
 # ------------------------------------------------------------------------------
 black==24.4.2                     # code formatter
-flake8==7.0.0                     # style/lint
+flake8==7.0.0                     # linting
