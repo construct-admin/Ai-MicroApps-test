@@ -17,8 +17,10 @@ Key additions:
 - Defensive error handling to prevent crashes from API exceptions.
 """
 
+import os
 import time
 import random
+import httpx
 from openai import OpenAI
 import streamlit as st
 
@@ -47,7 +49,25 @@ def with_backoff(fn, *args, **kwargs):
 # ------------------------------------------------------------------------------
 # Handler implementations
 # ------------------------------------------------------------------------------
-client = OpenAI()  # <-- NEW SDK client
+# Remove proxy environment variables (safety)
+for var in [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "OPENAI_PROXY",
+    "OPENAI_HTTP_PROXY",
+]:
+    if var in os.environ:
+        del os.environ[var]
+
+# Force a clean HTTP client that does NOT take proxies from environment
+http_client = httpx.Client(
+    proxies=None,  # <-- forces no proxies
+    follow_redirects=True,
+    timeout=60,
+)
+
+client = OpenAI(http_client=http_client)  # <-- NEW SDK client
 
 
 def handle_openai(context):
