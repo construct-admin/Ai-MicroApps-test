@@ -1,33 +1,17 @@
-# System dependencies for ai-microapps-test
-# OES GenAI Team – Compatible with Streamlit Cloud
-
-# Core Browser Security & Networking
 libnss3
 libnspr4
-
-# Accessibility / GUI Toolkit Support
 libatk1.0-0
 libatk-bridge2.0-0
-
-# Graphics & Rendering
 libdrm2
 libxcomposite1
 libxdamage1
 libxfixes3
 libgbm1
-
-# Fonts & Layout
 libpango-1.0-0
 libxkbcommon0
-
-# Sound & Accessibility
 libasound2
 libatspi2.0-0
-
-# GUI Runtime (GTK)
 libgtk-3-0
 libxrandr2
-
-# Core X11 Libraries
 libx11-xcb1
 libxcb1
