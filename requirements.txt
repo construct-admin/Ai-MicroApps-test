@@ -50,8 +50,8 @@ langchain-text-splitters==0.3.11  # Updated splitters for LC 0.3+
 langchain-openai==0.2.1           # OpenAI v2-compatible LC integration
 langchain-mongodb==0.7.2          # Modern Atlas Vector Search store
 
-# LangChain telemetry + tracing layer (MUST be <0.3 for LC 0.3.x)
-langsmith==0.2.5
+# LangChain telemetry + tracing layer (required for LC 0.3.x)
+langsmith==0.3.74
 
 # ------------------------------------------------------------------------------
 # STORAGE / DATA / LOGGING
