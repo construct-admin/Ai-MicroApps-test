@@ -15,23 +15,30 @@ Included:
 - Fully compatible with new OpenAI Python client v1.0+
 
 Key changes from legacy handler:
-- Removed deprecated global `openai.chat.completions.create`
-- Replaced with new `OpenAI()` client (required for v1.x)
+- Removed deprecated global `openai.ChatCompletion.create`
+- Replaced with new `OpenAI()` client (required for v1.x+)
 - Client created inside handler to prevent Streamlit Cloud injecting `proxies`
 
 Additional improvements in this patch:
-- Correct handling of multimodal output blocks (GPT-4o family)
-- Accurate usage token extraction using v1.x fields (`input_tokens`, `output_tokens`)
+- Added httpx transport override (CRITICAL FIX) to BLOCK Streamlit proxy injection
+- Correct handling of multimodal output (GPT-4o style content blocks)
+- Accurate token usage extraction using OpenAI v1.x usage fields:
+    - `input_tokens`
+    - `output_tokens`
 - Consolidated message-building logic for clarity and maintainability
-- More transparent error messages surfaced through the Streamlit UI
-- Future-proofed against upcoming OpenAI v2+ API conventions
+- Future-proofed for upcoming OpenAI v2+ unified API patterns
 """
 
 import os
 import time
 import random
 import streamlit as st
+
+# Core OpenAI SDK
 from openai import OpenAI
+
+# CRITICAL: used to override Streamlit's injected proxy layer
+import httpx
 
 
 # ------------------------------------------------------------------------------
@@ -43,16 +50,15 @@ def with_backoff(fn, *args, **kwargs):
     Intended for transient operational failures such as:
     - Temporary 5xx errors from OpenAI
     - Network jitter on Streamlit Community Cloud
-    - Rate-limiting windows that open after a brief delay
+    - Rate-limiting windows that reopen after a delay
 
-    This mechanism ensures that small hiccups do NOT cause the app to crash.
+    This mechanism ensures that intermittent failures do NOT crash the app.
     """
     delay = 0.5
     for attempt in range(5):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            # On the final attempt, surface the error normally
             if attempt == 4:
                 raise
 
@@ -69,33 +75,51 @@ def handle_openai(context):
     """
     Core OpenAI handler used by OES micro-apps.
 
-    Compatible with all current and upcoming OpenAI 2025 models:
+    Supports:
     - GPT-4o / GPT-4o-mini
     - GPT-4.1 / GPT-4.1-mini
-    - Future OpenAI "unified" chat models (v1 API)
+    - Future unified OpenAI chat models (v1 API)
 
-    This handler supports:
+    Supports:
     - Text-only prompts
     - Multimodal prompts (image + text)
-    - Cost calculation using modern token usage fields
-    - Fully updated message schema consistent with OpenAI v1.x
+    - Cost calculation via v1.x usage fields
+    - Fully updated GPT-4o content block handling
 
-    Important implementation details:
-    - The OpenAI client is constructed INSIDE the handler.
-      This prevents Streamlit Cloud from injecting unsupported parameters
-      such as `proxies`, a common source of deployment failures.
-    - Message construction supports the GPT-4o "content blocks" format.
+    CRITICAL IMPLEMENTATION DETAIL:
+    --------------------------------
+    We *override* Streamlit Cloud’s injected HTTPX client because
+    Streamlit forcibly injects an unsupported parameter:
+
+        proxies={...}
+
+    which OpenAI SDK v1.40+ rejects.
+
+    We bypass this by providing our own httpx.Client WITHOUT proxy config.
     """
 
     # ----------------------------------------------------------
-    # Initialize OpenAI client (inside handler — CRITICAL FIX)
+    # Load API key
     # ----------------------------------------------------------
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
 
-    # Modern constructor: accepts only safe, documented parameters.
-    client = OpenAI(api_key=api_key)
+    # ----------------------------------------------------------
+    # CRITICAL FIX: prevent Streamlit from injecting `proxies`
+    # ----------------------------------------------------------
+    # We supply our own HTTP transport WITHOUT proxy support.
+    transport = httpx.HTTPTransport(proxy=None)
+    http_client = httpx.Client(
+        transport=transport,
+        follow_redirects=True,
+    )
+
+    # Modern, safe OpenAI client instantiation
+    client = OpenAI(
+        api_key=api_key,
+        http_client=http_client,  # <--- Overrides Streamlit's proxy-injected wrapper
+    )
 
     # ----------------------------------------------------------
     # Extract model parameters from context
@@ -109,18 +133,18 @@ def handle_openai(context):
     # ----------------------------------------------------------
     messages = []
 
-    # System prompt
+    # System prompt block
     if context.get("SYSTEM_PROMPT"):
         messages.append({"role": "system", "content": context["SYSTEM_PROMPT"]})
 
-    # User content: always a list of blocks for modern models
+    # User content blocks (GPT-4o style)
     user_content = []
 
     # Text block
     if context.get("user_prompt"):
         user_content.append({"type": "text", "text": context["user_prompt"]})
 
-    # Optional image blocks (data URLs already base64-encoded upstream)
+    # Image blocks (URL-based, already base64-upstream processed)
     if context.get("supports_image") and context.get("image_urls"):
         for url in context["image_urls"]:
             user_content.append({"type": "image_url", "image_url": {"url": url}})
@@ -143,12 +167,12 @@ def handle_openai(context):
         )
 
         # ------------------------------------------------------
-        # Extract assistant text (handles multimodal structured blocks)
+        # Extract model output (handle structured blocks)
         # ------------------------------------------------------
         msg = response.choices[0].message["content"]
 
         if isinstance(msg, list):
-            # GPT-4o sometimes returns multiple block types (reasoning, text, etc.)
+            # GPT-4o returns structured content blocks
             text = "\n".join(
                 block.get("text", "")
                 for block in msg
@@ -158,19 +182,16 @@ def handle_openai(context):
             text = str(msg).strip()
 
         # ------------------------------------------------------
-        # Cost Calculation (OpenAI v1.x usage model)
+        # Token usage & price calculation
         # ------------------------------------------------------
         usage = response.usage
 
-        # Modern fields (preferred)
         input_toks = getattr(usage, "input_tokens", 0)
         output_toks = getattr(usage, "output_tokens", 0)
 
-        # Model pricing loaded from template configuration
         price_in = context.get("price_input_token_1M", 0)
         price_out = context.get("price_output_token_1M", 0)
 
-        # Convert token counts ↦ dollar amount
         execution_price = (input_toks / 1_000_000) * price_in + (
             output_toks / 1_000_000
         ) * price_out
@@ -178,7 +199,6 @@ def handle_openai(context):
         return text, float(execution_price)
 
     except Exception as e:
-        # Visible in the UI and logs
         st.error(f"OpenAI handler failed: {e}")
         raise
 
