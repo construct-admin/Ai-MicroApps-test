@@ -24,16 +24,45 @@ import streamlit as st
 # ------------------------------------------------------------------------------
 class NullStorageHandler:
     """
-    A dummy handler used when no storage backend is configured.
-    Keeps local app behavior consistent but avoids write errors.
+    NullStorageHandler (No-Op Storage Backend)
+    -----------------------------------------
+    This handler is used whenever *no* persistent storage backend is configured.
+
+    Purpose:
+    - Prevent all write/read failures when GSHEETS_URL or SQLALCHEMY_URL
+      is intentionally left empty (typical for internal prototypes or
+      when running locally).
+    - Maintain consistent interface for all micro-apps without requiring a
+      real database, spreadsheet, or logging service.
+    - Avoid UI clutter in production deployments by suppressing messages
+      unless DEBUG_STORAGE is explicitly enabled.
+
+    Behavior:
+    - get_runs_data() returns an empty DataFrame.
+    - post_runs_data() returns the provided DataFrame unmodified.
+    - If DEBUG_STORAGE="true" or "1", informational messages are shown.
+      Otherwise the handler remains completely silent.
     """
 
+    def __init__(self):
+        # Determine debug behavior once during initialization
+        debug_flag = os.getenv("DEBUG_STORAGE", "false").strip().lower()
+        self.debug = debug_flag in ("1", "true", "yes")
+
     def get_runs_data(self):
-        st.info("⚠️ No storage backend configured. Returning empty DataFrame.")
+        """Return an empty DataFrame; optionally log to UI if in debug mode."""
+        if self.debug:
+            st.info(
+                "⚠️ [NullStorage] No storage backend configured. Returning empty DataFrame."
+            )
         return pd.DataFrame()
 
     def post_runs_data(self, df):
-        st.info("⚠️ No storage backend configured. Data not persisted.")
+        """Accept a DataFrame but do not persist it; optionally show debug message."""
+        if self.debug:
+            st.info(
+                "⚠️ [NullStorage] No storage backend configured. Data not persisted."
+            )
         return df
 
 
