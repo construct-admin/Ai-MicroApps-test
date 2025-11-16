@@ -24,7 +24,7 @@ python-dotenv==1.0.1              # secure local .env loading
 pandas==2.2.2                     # safe & modern; aligns with numpy<2 constraint
 numpy==1.26.4                     # many AI libs still require <2.0 (safe choice)
 Pillow==10.4.0                    # robust for image uploads & OCR preprocessing
-requests==2.32.3                  # stable HTTP backbone
+requests==2.32.5                  # stable HTTP backbone
 
 # ------------------------------------------------------------------------------
 # MODEL CLIENTS / LLM CONNECTORS (NEW-VERSION CLIENTS)
