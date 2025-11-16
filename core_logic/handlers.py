@@ -169,17 +169,23 @@ def handle_openai(context):
         # ------------------------------------------------------
         # Extract model output (handle structured blocks)
         # ------------------------------------------------------
-        msg = response.choices[0].message["content"]
+        raw_content = response.choices[0].message.content
 
-        if isinstance(msg, list):
-            # GPT-4o returns structured content blocks
+        # Case 1 — GPT-4o multimodal (list of blocks)
+        if isinstance(raw_content, list):
             text = "\n".join(
-                block.get("text", "")
-                for block in msg
-                if isinstance(block, dict) and "text" in block
+                block.text
+                for block in raw_content
+                if hasattr(block, "text") and block.text
             ).strip()
+
+        # Case 2 — Simple string
+        elif isinstance(raw_content, str):
+            text = raw_content.strip()
+
+        # Fallback — unknown format
         else:
-            text = str(msg).strip()
+            text = str(raw_content)
 
         # ------------------------------------------------------
         # Token usage & price calculation
