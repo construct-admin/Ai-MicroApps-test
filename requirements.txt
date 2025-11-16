@@ -45,7 +45,7 @@ tiktoken==0.7.0                   # token counting, embedding dimensionality uti
 # ------------------------------------------------------------------------------
 langchain==0.3.27                 # Main LangChain package (LCEL-first)
 langchain-core==0.3.79            # Core runtime & Runnable engine
-langchain-community==0.3.30       # Compatible w/ LC-Core 0.3.x + requests==2.32.3
+langchain-community==0.3.31       # Compatible w/ LC-Core 0.3.x + requests==2.32.3
 langchain-text-splitters==0.3.11  # Updated splitters for LC 0.3+
 langchain-openai==0.2.3           # OpenAI v2-compatible LC integration
 langchain-mongodb==0.7.2          # Modern Atlas Vector Search store

@@ -33,17 +33,15 @@ from dotenv import load_dotenv
 
 from pymongo import MongoClient
 
-from langchain_openai import OpenAIEmbeddings
+# LangChain (Modern 0.3+)
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_mongodb import MongoDBAtlasVectorSearch
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from langchain_openai.chat_models import ChatOpenAI
+from langchain_community.document_loaders import PyPDFLoader  # type: ignore
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-
-from langchain_community.callbacks.manager import get_openai_callback
+from langchain_core.output_parsers import StrOutputParser
+from langchain_community.callbacks import get_openai_callback  # type: ignore
 
 # ----------------------------------------------------------------------
 # Environment loading
