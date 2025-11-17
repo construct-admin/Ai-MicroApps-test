@@ -129,13 +129,24 @@ def get_bloom_taxonomy_conditions():
     return [
         {
             "condition": {},
-            "prompt": "Please focus on the following Bloom's Taxonomy verbs: \n Verbs:",
+            "prompt": (
+                "Please generate the learning objectives in the following strict Bloom’s "
+                "Taxonomy order (lowest → highest cognitive demand):\n"
+                "1. Remember\n"
+                "2. Understand\n"
+                "3. Apply\n"
+                "4. Analyze\n"
+                "5. Evaluate\n"
+                "6. Create\n\n"
+                "Only include the levels selected by the user, but always output them in this "
+                "fixed sequence to ensure proper scaffolding and reduced cognitive load."
+            ),
         },
         {"condition": {"goal_rem": True}, "prompt": "Remember."},
-        {"condition": {"goal_apply": True}, "prompt": "Apply."},
-        {"condition": {"goal_evaluate": True}, "prompt": "Evaluate."},
         {"condition": {"goal_under": True}, "prompt": "Understand."},
+        {"condition": {"goal_apply": True}, "prompt": "Apply."},
         {"condition": {"goal_analyze": True}, "prompt": "Analyze."},
+        {"condition": {"goal_evaluate": True}, "prompt": "Evaluate."},
         {"condition": {"goal_create": True}, "prompt": "Create."},
     ]
 
@@ -300,10 +311,10 @@ PHASES = {
                 "unsafe_allow_html": True,
             },
             "goal_rem": {"type": "checkbox", "label": "Remember"},
-            "goal_apply": {"type": "checkbox", "label": "Apply"},
-            "goal_evaluate": {"type": "checkbox", "label": "Evaluate"},
             "goal_under": {"type": "checkbox", "label": "Understand"},
+            "goal_apply": {"type": "checkbox", "label": "Apply"},
             "goal_analyze": {"type": "checkbox", "label": "Analyze"},
+            "goal_evaluate": {"type": "checkbox", "label": "Evaluate"},
             "goal_create": {"type": "checkbox", "label": "Create"},
             "academic_stage": {
                 "type": "markdown",
@@ -354,7 +365,8 @@ SIDEBAR_HIDDEN = True
 def build_user_prompt(user_input: dict) -> str:
     """Build a composite user prompt dynamically based on UI selections."""
     try:
-        user_prompt_parts = [
+        # --- First collect all prompt parts ---
+        raw_parts = [
             config["prompt"].format(
                 **{key: user_input.get(key, "") for key in config["condition"].keys()}
             )
@@ -364,7 +376,37 @@ def build_user_prompt(user_input: dict) -> str:
                 for key, value in config["condition"].items()
             )
         ]
+
+        # --- Bloom ordering logic (smart method) ---
+        BLOOM_ORDER = {
+            "Remember.": 1,
+            "Understand.": 2,
+            "Apply.": 3,
+            "Analyze.": 4,
+            "Evaluate.": 5,
+            "Create.": 6,
+        }
+
+        bloom_parts = []
+        non_bloom_parts = []
+
+        for part in raw_parts:
+            # Exact match to Bloom-level prompts
+            if part.strip() in BLOOM_ORDER:
+                bloom_parts.append(part)
+            else:
+                non_bloom_parts.append(part)
+
+        # Sort Bloom parts by their order index
+        bloom_parts_sorted = sorted(
+            bloom_parts, key=lambda x: BLOOM_ORDER.get(x.strip(), 999)
+        )
+
+        # Recombine (keep all non-Bloom prompts as-is)
+        user_prompt_parts = non_bloom_parts + bloom_parts_sorted
+
         return "\n".join(user_prompt_parts)
+
     except KeyError as e:
         raise ValueError(f"Missing key in user input: {e}")
 
