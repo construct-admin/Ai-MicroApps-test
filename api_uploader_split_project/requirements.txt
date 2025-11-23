@@ -1,55 +1,54 @@
 ################################################################################
-# OES GenAI Micro-Apps – Requirements File
+# OES GenAI Micro-App — Unified Requirements (App-Level)
 # Maintained by: Imaad Fakier (Senior GenAI Developer)
 #
-# Context:
-#     Dependency layer for the Canvas Import / DOCX → Canvas Streamlit application.
-#     Pinned versions ensure stability locally and on Streamlit Community Cloud.
-#
-# RULES:
-#   • Pin EVERYTHING (Streamlit Cloud requires reproducibility).
-#   • Only include libraries ACTUALLY used by this micro-app.
-#   • If you add a new library, pin it and document why.
+# IMPORTANT:
+# - This app inherits the modern ecosystem requirements.
+# - DO NOT loosen versions; Streamlit Cloud will break.
 ################################################################################
 
+# --- CORE RUNTIME ----
+streamlit==1.39.0
+python-dotenv==1.0.1
+requests==2.32.5
+pandas==2.2.2
+numpy==1.26.4
+Pillow==10.4.0
 
-# ------------------------------------------------------------------------------
-# CORE STREAMLIT RUNTIME
-# ------------------------------------------------------------------------------
-streamlit==1.39.0                 # stable + compatible with community cloud
-python-dotenv==1.0.1              # optional .env support for local development
-requests==2.32.3                  # HTTP client for Canvas API + external calls
-Pillow==10.4.0                    # image handling (Streamlit dependency)
+# --- MODEL CLIENTS / LLM PROVIDERS ---
+openai==1.52.0                    # OpenAI v2 (responses API, embeddings v2)
+anthropic==0.35.0
+google-generativeai==0.8.3
+tiktoken==0.7.0
 
+# --- LANGCHAIN LCEL ECOSYSTEM ---
+langchain==0.3.27
+langchain-core==0.3.79
+langchain-community==0.3.31
+langchain-text-splitters==0.3.11
+langchain-openai==0.2.3
+langchain-mongodb==0.7.2
+langsmith==0.3.45
 
-# ------------------------------------------------------------------------------
-# DOCUMENT PROCESSING
-# ------------------------------------------------------------------------------
-python-docx==1.1.2                # parsing .docx storyboards/modules
-
-
-# ------------------------------------------------------------------------------
-# GOOGLE DRIVE / GOOGLE DOCS INTEGRATION
-# Needed for: fetch_docx_from_gdoc(), outline extraction, bookmarks, headings.
-# ------------------------------------------------------------------------------
-google-api-python-client==2.133.0
-google-auth==2.29.0
+# --- GOOGLE CLIENT STACK (PINNED BOUNDARIES) ---
+google-api-python-client==2.154.0
+google-auth==2.35.0
 google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+protobuf==5.27.3                  # must stay <6.0.0
 
+# --- DOCX / TRANSCRIPTS ---
+python-docx==1.1.2
+pysrt==1.1.2
+mammoth==1.7.0
 
-# ------------------------------------------------------------------------------
-# OPENAI SDK
-# Notes:
-#   - Supports GPT-4o, GPT-4o-mini, file_search, vector stores.
-#   - Version pinned to avoid breaking changes in major releases.
-# ------------------------------------------------------------------------------
-openai==1.13.0
+# --- OCR / MEDIA PROCESSING ---
+opencv-python-headless==4.10.0.84
+pytesseract==0.3.13
 
-
-# ------------------------------------------------------------------------------
-# TYPE SUPPORT / INTERNAL OPTIMIZATIONS (Implicit)
-# These are indirect dependencies pulled by modules above, pinned here to avoid
-# future breakage on Streamlit cloud. DO NOT remove.
-# ------------------------------------------------------------------------------
-protobuf==5.27.3                  # required by google API client stack
-httplib2==0.22.0                  # google-auth-httplib2 dependency
+# --- MONGODB / LOGGING ---
+pymongo==4.8.0
+dnspython==2.6.1
+SQLAlchemy==2.0.36
+st-gsheets-connection==0.1.0
+pandasql==0.7.3
