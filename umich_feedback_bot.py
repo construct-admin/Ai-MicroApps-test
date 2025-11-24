@@ -41,11 +41,22 @@ MAX_PREVIEW_CHARS = 80_000
 # 🔐 2. API Key Validation
 # ==============================================================
 
-
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not API_KEY:
     st.error("⚠️ Missing OPENAI_API_KEY. Please add it to your .env file.")
-client = OpenAI(api_key=API_KEY) if API_KEY else None
+
+# --- CRITICAL FIX: Override Streamlit proxy injection ---
+import httpx
+
+if API_KEY:
+    transport = httpx.HTTPTransport(proxy=None)
+    http_client = httpx.Client(
+        transport=transport,
+        follow_redirects=True,
+    )
+    client = OpenAI(api_key=API_KEY, http_client=http_client)
+else:
+    client = None
 
 
 # ==============================================================
