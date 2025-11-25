@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-12
+# Refactor date: 2025-11-25
 # Refactored by: Imaad Fakier
 # Purpose: Align PTC Video Script Generator micro-app with OES GenAI Streamlit standards.
 # ------------------------------------------------------------------------------
