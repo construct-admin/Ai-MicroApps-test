@@ -98,7 +98,8 @@ RAG_TRUNCATION_CHARS = 2000  # Safety limit for token budget
 # ------------------------------------------------------------------------------
 # System prompt configuration
 # ------------------------------------------------------------------------------
-SYSTEM_PROMPT = """Develop and support the development of high-quality academic video scripts of 780 - 880 words.
+SYSTEM_PROMPT = """
+Develop and support the development of high-quality academic video scripts of 780 - 880 words.
 
 All scripts should contain the following: 
 1. Hook: Start each video with something that grabs the viewer’s attention immediately. This could be a surprising fact, an intriguing question, an intriguing example, or a metaphor/analogy. The aim is to spark curiosity and encourage viewers to stay engaged. 
@@ -111,7 +112,34 @@ Writing style and tone:
 - Writing should be clear and succinct 
 - Adopt a conversational tone
 
-The example script in the pdf should be used to inform the  tone, style, and structure of responses. Format scripts as a table with columns for text, and visual cues. 
+The example script in the pdf should be used to inform the tone, style, and structure of responses. Format scripts as a table with columns for text, and visual cues.
+
+---
+STRICT OUTPUT REQUIREMENTS — DO NOT IGNORE
+
+You MUST output the final script ONLY as a MARKDOWN TABLE with TWO columns:
+
+| Text | Visual Cues |
+
+Rules:
+- The full narrative of the video script appears in the **Text** column.
+- The **Visual Cues** column provides visual guidance corresponding to each section or paragraph.
+- Each section of the script must begin with a timing indicator, in parentheses, at the start of the Text cell. Example:
+(0:00–0:25) <script text>
+
+The output MUST include the following sections in order:
+1. Hook
+2. Learning Objectives
+3. Real-World Examples
+4. Body Paragraph 1
+5. Body Paragraph 2
+6. Body Paragraph 3
+7. Conclusion
+
+Do NOT include any explanation, commentary, notes, or formatting outside of the table.
+Do NOT output the script as plain paragraphs.
+Do NOT introduce camera directions or scene instructions.
+BEGIN OUTPUT WITH THE TABLE HEADER ROW.
 """
 
 # ------------------------------------------------------------------------------
