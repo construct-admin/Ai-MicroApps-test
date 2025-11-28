@@ -814,9 +814,27 @@ def main():
             "🔎 Visualize selected (no upload)",
             type="primary",
             use_container_width=True,
-            disabled=not (st.session_state.get("_openai_key") and selected_indices),
+            disabled=not selected_indices,
         ):
-            client = ensure_client(st.session_state.get("_openai_key", ""))
+            # ------------------------------------------------------------------
+            # OPENAI API KEY (Environment-based — centrally managed)
+            # ------------------------------------------------------------------
+            import os
+
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+
+            if not openai_key:
+                st.error(
+                    "⚠️ OPENAI_API_KEY environment variable is missing.\n\n"
+                    "Please configure it in the Streamlit deployment environment."
+                )
+                st.stop()
+
+            # Store in session for internal consistency (no user entry needed)
+            st.session_state["_openai_key"] = openai_key
+
+            # Initialize the OpenAI client
+            client = ensure_client(openai_key)
 
             for idx in selected_indices:
                 p = st.session_state.pages[idx]
