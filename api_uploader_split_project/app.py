@@ -521,10 +521,10 @@ def main():
 
         with st.expander("Show raw blocks parsed", expanded=False):
             for p in st.session_state.pages:
-                with st.expander(
-                    f"{p['page_title']}  ({p['page_type']})", expanded=False
-                ):
+                st.markdown(f"#### 📄 {p['page_title']} ({p['page_type']})")
+                with st.container():
                     st.code(p["raw"], language="markdown")
+                    st.markdown("---")
 
     # ──────────────────────────────────────────────────────────────────────────────
     # Editable metadata & template picking
