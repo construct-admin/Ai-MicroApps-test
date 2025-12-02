@@ -19,7 +19,7 @@
 # ------------------------------------------------------------------------------
 streamlit==1.39.0                 # Stable + Cloud-compatible
 streamlit-extras==0.4.2           # stylable_container, let_it_rain, keyboard, etc.
-streamlit-cropper==0.1.0         # image cropping widget for Streamlit
+streamlit-cropper>=0.3.1         # image cropping widget for Streamlit
 python-dotenv==1.0.1              # secure local .env loading
 
 pandas==2.2.2                     # safe & modern; aligns with numpy<2 constraint
