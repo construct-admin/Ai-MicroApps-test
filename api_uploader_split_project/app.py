@@ -402,11 +402,14 @@ def main():
     # 4) OpenAI API credentials
     # ──────────────────────────────────────────────────────────────────────────────
     with st.expander("🤖 OpenAI API Credentials", expanded=True):
-        st.session_state["_openai_key"] = st.text_input(
-            "OpenAI API Key",
-            type="password",
-            value=st.session_state.get("_openai_key", ""),
-        )
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            st.error("Server missing the OpenAI API key environment variable.")
+            st.stop()
+
+        # Do not allow user input anymore
+        st.caption("Using server-provided API credentials.")
+
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
             st.session_state["gpt_model"] = st.selectbox(
