@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------------------
 # File: kb.py
-# Refactor date: 2025-11-13
+# Refactor date: 2025-12-05
 # Refactored by: Imaad Fakier
 #
 # Purpose:
@@ -29,6 +29,7 @@
 from io import BytesIO
 from typing import Dict, Any
 from openai import OpenAI
+import os
 
 
 # ==============================================================================
@@ -53,8 +54,13 @@ def ensure_client(api_key: str) -> OpenAI:
             If api_key is missing or empty.
     """
     if not api_key:
-        raise ValueError("OpenAI API key is required")
-    return OpenAI(api_key=api_key)
+        raise ValueError("Missing OpenAI API key")
+
+    # Set environment variable (required by SDK v1+)
+    os.environ["OPENAI_API_KEY"] = api_key
+
+    # Instantiate client without keyword args
+    return OpenAI()
 
 
 # ==============================================================================
