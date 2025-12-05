@@ -51,6 +51,7 @@ import json
 from io import BytesIO
 import time
 import hashlib
+import os
 
 import streamlit as st
 
@@ -826,8 +827,6 @@ def main():
             # ------------------------------------------------------------------
             # OPENAI API KEY (Environment-based — centrally managed)
             # ------------------------------------------------------------------
-            import os
-
             openai_key = os.getenv("OPENAI_API_KEY", "")
 
             if not openai_key:
