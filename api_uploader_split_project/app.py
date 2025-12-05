@@ -276,9 +276,13 @@ def main():
         # Pre-flight: do we even have VS support?
         kb_client = None
         kb_supported = False
-        if st.session_state.get("_openai_key"):
+
+        # Always use environment key when available
+        openai_key = os.getenv("OPENAI_API_KEY")
+
+        if openai_key:
             try:
-                kb_client = ensure_client(st.session_state["_openai_key"])
+                kb_client = ensure_client(openai_key)
                 kb_supported = vector_store_supported(kb_client)
             except Exception as e:
                 st.warning(f"OpenAI client not ready: {e}")
@@ -402,8 +406,6 @@ def main():
     # 4) OpenAI API credentials
     # ──────────────────────────────────────────────────────────────────────────────
     with st.expander("🤖 OpenAI API Credentials", expanded=True):
-        import os
-
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
             st.error("Server missing the OpenAI API key environment variable.")
