@@ -46,7 +46,6 @@ Author:
 # Imports
 # ------------------------------------------------------------------------------
 
-import os
 import re
 import json
 from io import BytesIO
@@ -403,6 +402,8 @@ def main():
     # 4) OpenAI API credentials
     # ──────────────────────────────────────────────────────────────────────────────
     with st.expander("🤖 OpenAI API Credentials", expanded=True):
+        import os
+
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
             st.error("Server missing the OpenAI API key environment variable.")
