@@ -836,12 +836,12 @@ def main():
                 )
                 st.stop()
 
-            # Store in session for internal consistency (no user entry needed)
             st.session_state["_openai_key"] = openai_key
-
-            # Initialize the OpenAI client
             client = ensure_client(openai_key)
 
+            # ------------------------------------------------------------------
+            # Process each selected item
+            # ------------------------------------------------------------------
             for idx in selected_indices:
                 p = st.session_state.pages[idx]
                 raw_block = p["raw"]
@@ -928,6 +928,7 @@ def main():
                     template_html = st.session_state.per_item_course_template_html.get(
                         idx
                     )
+
                 tools = None
                 if p["template_source"] == "kb" and st.session_state.get(
                     "vector_store_id"
@@ -939,6 +940,7 @@ def main():
                         }
                     ]
 
+                # SYSTEM / USER messages
                 if template_html:
                     SYSTEM = (
                         base_rules
@@ -953,25 +955,42 @@ def main():
                     )
                     USER = f"STORYBOARD PAGE BLOCK:\n{raw_block}\n"
 
-                kwargs = {
+                # ------------------------------------------------------------------
+                # CORRECT OpenAI SDK v1.x chat.completions.create payload
+                # ------------------------------------------------------------------
+                payload = {
                     "model": "gpt-4o",
-                    "input": [
+                    "messages": [
                         {"role": "system", "content": SYSTEM},
                         {"role": "user", "content": USER},
                     ],
+                    "max_tokens": st.session_state.get("gpt_max_tokens", 2000),
                 }
                 if tools:
-                    kwargs["tools"] = tools
+                    payload["tools"] = tools
 
-                response = client.responses.create(**kwargs)
-                raw_out = getattr(response, "output_text", "") or ""
+                # ------------------------------------------------------------------
+                # Call Chat Completions API (correct v1.x)
+                # ------------------------------------------------------------------
+                try:
+                    response = client.chat.completions.create(**payload)
+                    content = response.choices[0].message.content or ""
+                except Exception as e:
+                    st.error(f"GPT error: {e}")
+                    continue
+
+                # ------------------------------------------------------------------
+                # Cleanup the model output
+                # ------------------------------------------------------------------
                 cleaned = re.sub(
-                    r"```(html|json)?", "", raw_out, flags=re.IGNORECASE
+                    r"```(html|json)?", "", content, flags=re.IGNORECASE
                 ).strip()
 
+                # Extract JSON (quiz only)
                 json_match = re.search(r"({[\s\S]+})\s*$", cleaned)
                 quiz_json = None
                 html_result = cleaned
+
                 if json_match and p["page_type"] == "quiz":
                     try:
                         quiz_json = json.loads(json_match.group(1))
