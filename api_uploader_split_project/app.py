@@ -1233,9 +1233,7 @@ def main():
                 for p in items:
                     idx = p["index"]
                     meta = f"{p['page_title']}  · Module: {p['module_name']}"
-                    with st.expander(
-                        meta, expanded=False, key=f"preview_expander_{idx}"
-                    ):
+                    with st.expander(meta, expanded=False):
                         html_result = st.session_state.gpt_results.get(idx, {}).get(
                             "html", ""
                         )
