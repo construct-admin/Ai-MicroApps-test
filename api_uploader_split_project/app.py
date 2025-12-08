@@ -66,7 +66,7 @@ from kb import (
 )
 
 from openai import __version__ as openai_version  # diagnostics
-from openai import OpenAI, RateLimitError, APIError
+from openai import RateLimitError, APIError
 
 # Google Doc helpers
 from gdoc_utils import (
@@ -134,7 +134,7 @@ def _init_state():
             st.session_state[k] = v
 
 
-def call_openai_with_retry(client: OpenAI, **kwargs) -> str:
+def call_openai_with_retry(client, **kwargs) -> str:
     """
     Wrapper around client.responses.create with exponential backoff for 429/5xx.
     Returns output_text (empty string if missing).
