@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Refactor date: 2025-11-28
+# Refactor date: 2025-11-08
 # Refactored by: Imaad Fakier
 # Purpose: Full-scope refactor of the Canvas Import micro-application to align
 #          with OES GenAI Streamlit application standards and patterns.
@@ -809,12 +809,14 @@ def main():
 
         selected_indices = []
         for i, p in enumerate(st.session_state.pages):
-            default_checked = st.session_state.get(f"viz_sel_{i}", False)
+            # Ensure the key exists
+            st.session_state.setdefault(f"viz_sel_{i}", False)
+
             checked = st.checkbox(
                 f"{p['page_title']}  ({p['page_type']}) · Module: {p['module_name']}",
-                value=default_checked,
                 key=f"viz_sel_{i}",
             )
+
             if checked:
                 selected_indices.append(i)
 
@@ -1244,10 +1246,12 @@ def main():
                         if p["page_type"] == "quiz" and quiz_json:
                             st.json(quiz_json)
 
-                        chosen = idx in st.session_state.upload_selected
+                        st.session_state.setdefault(f"upsel_{idx}", False)
+
                         new_choice = st.checkbox(
-                            "Select for upload", value=chosen, key=f"upsel_{idx}"
+                            "Select for upload", key=f"upsel_{idx}"
                         )
+
                         if new_choice:
                             st.session_state.upload_selected.add(idx)
                         else:
