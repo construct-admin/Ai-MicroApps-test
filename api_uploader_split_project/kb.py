@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------------------
 # File: kb.py
-# Refactor date: 2025-12-05
+# Refactor date: 2025-12-08
 # Refactored by: Imaad Fakier
 #
 # Purpose:
@@ -33,8 +33,10 @@ import os
 
 
 # ==============================================================================
-# Client Initialization
+# Client Initialization (Patched for OpenAI v1.x + Streamlit Cloud compatibility)
 # ==============================================================================
+
+import httpx  # CRITICAL: needed to override Streamlit’s proxy-injected HTTP layer
 
 
 def ensure_client(api_key: str) -> OpenAI:
@@ -52,15 +54,40 @@ def ensure_client(api_key: str) -> OpenAI:
     Raises:
         ValueError:
             If api_key is missing or empty.
+
+    CRITICAL FIX:
+    -------------
+    Streamlit Cloud *injects* a hidden proxies={} argument into all httpx clients.
+    The OpenAI Python SDK v1.x rejects this and raises:
+
+        TypeError: Client.__init__() got an unexpected keyword argument 'proxies'
+
+    To bypass this, we manually create an httpx.Client with NO proxy layer
+    and explicitly pass it to OpenAI(), which avoids Streamlit’s wrapper.
     """
     if not api_key:
         raise ValueError("Missing OpenAI API key")
 
-    # Set environment variable (required by SDK v1+)
     os.environ["OPENAI_API_KEY"] = api_key
 
-    # Instantiate client without keyword args
-    return OpenAI()
+    # ----------------------------------------------------------
+    # BLOCK Streamlit’s proxy layer (CRITICAL)
+    # ----------------------------------------------------------
+    transport = httpx.HTTPTransport(proxy=None)
+    http_client = httpx.Client(
+        transport=transport,
+        follow_redirects=True,
+    )
+
+    # ----------------------------------------------------------
+    # Safe OpenAI client instantiation (v1.x compliant)
+    # ----------------------------------------------------------
+    client = OpenAI(
+        api_key=api_key,
+        http_client=http_client,  # <--- Prevents Streamlit from injecting proxies
+    )
+
+    return client
 
 
 # ==============================================================================
