@@ -1220,11 +1220,17 @@ def main():
                 with tcols[0]:
                     if st.button(f"Select all in {target_type.title()}s"):
                         for p in items:
-                            st.session_state.upload_selected.add(p["index"])
+                            idx = p["index"]
+                            st.session_state.upload_selected.add(idx)
+                            st.session_state[f"upsel_{idx}"] = True
+
                 with tcols[1]:
                     if st.button(f"Clear selection in {target_type.title()}s"):
                         for p in items:
-                            st.session_state.upload_selected.discard(p["index"])
+                            idx = p["index"]
+                            st.session_state.upload_selected.discard(idx)
+                            st.session_state[f"upsel_{idx}"] = False
+
                 with tcols[2]:
                     do_tab_upload = st.button(
                         f"🚀 Upload Selected {target_type.title()}s",
